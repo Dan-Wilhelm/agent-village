@@ -1,5 +1,7 @@
 "use client";
 
+import type { BuildingId } from "./layout";
+
 /** Bridges between React DOM (HUD) and the 3D scene, without prop drilling. */
 
 export const KEYMAP = [
@@ -23,10 +25,20 @@ interface PlayerApi {
   teleport: (x: number, z: number, yaw: number) => void;
 }
 
+type BuildingEnterHandler = (building: BuildingId) => void;
+
+let buildingEnterHandler: BuildingEnterHandler | null = null;
 let pointerLock: PointerLockApi | null = null;
 let player: PlayerApi | null = null;
 
 export const sceneBridge = {
+  /** The 2D UI registers what should happen when the player walks into a building. */
+  onEnterBuilding(handler: BuildingEnterHandler | null) {
+    buildingEnterHandler = handler;
+  },
+  enteredBuilding(building: BuildingId) {
+    buildingEnterHandler?.(building);
+  },
   registerPointerLock(api: PointerLockApi | null) {
     pointerLock = api;
   },

@@ -9,7 +9,7 @@ import type { PointerLockControls as PointerLockControlsImpl } from "three-stdli
 
 import { sceneBridge, type ControlName } from "./controls";
 import { debugView } from "./debug";
-import { PLAYER_SPAWN } from "./layout";
+import { BUILDINGS, PLAYER_SPAWN, type BuildingId } from "./layout";
 import { movers } from "./movement";
 import { interactionOf, useVillage } from "./store";
 
@@ -18,6 +18,21 @@ const RUN = 7;
 const EYE_OFFSET = 0.75; // capsule center → eyes (~1.6 m above ground)
 const TALK_DISTANCE = 3.5;
 const UP = new Vector3(0, 1, 0);
+const INSIDE_INSET = 0.8; // must be clearly past the door before "entering" counts
+
+/** Which house the point is inside of (fields don't count), or null. */
+function buildingAt(x: number, z: number): BuildingId | null {
+  for (const b of Object.values(BUILDINGS)) {
+    if (b.kind !== "house") continue;
+    if (
+      Math.abs(x - b.center.x) < b.size.x / 2 - INSIDE_INSET &&
+      Math.abs(z - b.center.z) < b.size.z / 2 - INSIDE_INSET
+    ) {
+      return b.id;
+    }
+  }
+  return null;
+}
 
 export function Player() {
   const body = useRef<RapierRigidBody>(null);
@@ -49,6 +64,7 @@ export function Player() {
   }, [setEvents]);
 
   const direction = useRef(new Vector3());
+  const insideOf = useRef<BuildingId | null>(null);
   const euler = useRef(new Euler(0, 0, 0, "YXZ"));
 
   // Expose lock/unlock and "back to desk" to the HUD.
@@ -134,6 +150,13 @@ export function Player() {
       }
     }
     state.setNearby(nearest);
+
+    // Report entering a building once per entry (edge-triggered).
+    const inside = buildingAt(pos.x, pos.z);
+    if (inside !== insideOf.current) {
+      insideOf.current = inside;
+      if (inside) sceneBridge.enteredBuilding(inside);
+    }
   });
 
   return (
