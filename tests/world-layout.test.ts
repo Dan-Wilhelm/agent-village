@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { BUILDINGS, BUILDING_INSIDE_NODE, DESK, DOOR_WIDTH, EDGES, NODES, QUEUE_SLOTS, queueMovePath } from "@/world/layout";
+import { BUILDINGS, BUILDING_INSIDE_NODE, DESK, DOOR_WIDTH, EDGES, NODES, PLAYER_SPAWN, QUEUE_SLOTS, queueMovePath } from "@/world/layout";
 import { buildGraph, segmentHitsRect, shortestPath } from "@/world/pathfinding";
 import { buildHouse, buildingColliders, buildDecorations, buildPathTiles } from "@/world/voxels/builders";
+import { buildVillage } from "@/world/voxels/world";
 
 const graph = buildGraph(NODES, EDGES);
 const nodeById = new Map(NODES.map((n) => [n.id, n]));
@@ -87,7 +88,7 @@ describe("voxel builders", () => {
         : def.door === "west" ? { x: def.center.x - def.size.x / 2 + 0.25, z: def.center.z }
         : { x: def.center.x + def.size.x / 2 - 0.25, z: def.center.z };
       const blocked = voxels.some(
-        (v) => Math.abs(v.x - doorPoint.x) < 0.3 && Math.abs(v.z - doorPoint.z) < 0.3 && v.y < 2,
+        (v) => Math.abs(v.x - doorPoint.x) < 0.3 && Math.abs(v.z - doorPoint.z) < 0.3 && v.y > 0 && v.y < 2, // the floor (y < 0) is walkable
       );
       expect(blocked, def.id).toBe(false);
     }
@@ -116,6 +117,67 @@ describe("voxel builders", () => {
     for (const c of a.treeColliders) {
       const [x, , z] = c.center;
       expect(tiles.some((t) => Math.abs(t.x - x) < 1 && Math.abs(t.z - z) < 1)).toBe(false);
+    }
+  });
+});
+
+describe("village props", () => {
+  const village = buildVillage();
+  const AGENT_RADIUS = 0.3;
+  const rectOf = (c: { center: [number, number, number]; halfExtents: [number, number, number] }, m: number) => ({
+    minX: c.center[0] - c.halfExtents[0] - m,
+    maxX: c.center[0] + c.halfExtents[0] + m,
+    minZ: c.center[2] - c.halfExtents[2] - m,
+    maxZ: c.center[2] + c.halfExtents[2] + m,
+  });
+
+  it("keeps every walking route free of furniture, props, trees, rocks and water", () => {
+    for (const c of village.propColliders) {
+      for (const [a, b] of EDGES) {
+        expect(segmentHitsRect(nodeById.get(a)!, nodeById.get(b)!, rectOf(c, AGENT_RADIUS)), `${a}->${b} vs ${c.center}`).toBe(false);
+      }
+    }
+  });
+
+  it("keeps the office queue, its approach paths and the owner's spot free", () => {
+    const officeIn = nodeById.get("office-in")!;
+    const officeOut = nodeById.get("office-out")!;
+    const segments: Array<[{ x: number; z: number }, { x: number; z: number }]> = [];
+    QUEUE_SLOTS.forEach((s, i) => {
+      segments.push([s.inside ? officeIn : officeOut, s], [officeOut, s]);
+      for (let j = 0; j < i; j++) {
+        let at: { x: number; z: number } = s;
+        for (const p of queueMovePath(i, j)) {
+          segments.push([at, p]);
+          at = p;
+        }
+      }
+    });
+    for (const c of village.propColliders) {
+      if (c === village.propColliders[0]) continue; // the desk itself: slots stand in front of it (checked below)
+      for (const [a, b] of segments) expect(segmentHitsRect(a, b, rectOf(c, AGENT_RADIUS)), `queue vs ${c.center}`).toBe(false);
+    }
+    const desk = rectOf(village.propColliders[0], AGENT_RADIUS);
+    for (const s of QUEUE_SLOTS) expect(s.x > desk.minX && s.x < desk.maxX && s.z > desk.minZ && s.z < desk.maxZ).toBe(false);
+    // the player's capsule (r = 0.35) fits at the spawn point
+    for (const c of village.propColliders) {
+      const r = rectOf(c, 0.35);
+      expect(PLAYER_SPAWN.x > r.minX && PLAYER_SPAWN.x < r.maxX && PLAYER_SPAWN.z > r.minZ && PLAYER_SPAWN.z < r.maxZ, `spawn vs ${c.center}`).toBe(false);
+    }
+  });
+
+  it("keeps all props inside the walkable world and out of door gaps", () => {
+    for (const def of Object.values(BUILDINGS)) {
+      const door =
+        def.door === "north" ? { x: def.center.x, z: def.center.z - def.size.z / 2 }
+        : def.door === "south" ? { x: def.center.x, z: def.center.z + def.size.z / 2 }
+        : def.door === "west" ? { x: def.center.x - def.size.x / 2, z: def.center.z }
+        : { x: def.center.x + def.size.x / 2, z: def.center.z };
+      for (const c of village.propColliders) {
+        const r = rectOf(c, 0);
+        const blocked = door.x > r.minX - 1 && door.x < r.maxX + 1 && door.z > r.minZ - 1 && door.z < r.maxZ + 1;
+        expect(blocked, `${def.id} door vs ${c.center}`).toBe(false);
+      }
     }
   });
 });

@@ -8,6 +8,7 @@ import { Euler, Vector3 } from "three";
 import type { PointerLockControls as PointerLockControlsImpl } from "three-stdlib";
 
 import { sceneBridge, type ControlName } from "./controls";
+import { debugView } from "./debug";
 import { PLAYER_SPAWN } from "./layout";
 import { movers } from "./movement";
 import { interactionOf, useVillage } from "./store";
@@ -101,7 +102,7 @@ export function Player() {
     const rb = body.current;
     if (!rb) return;
     const pos = rb.translation();
-    camera.position.set(pos.x, pos.y + EYE_OFFSET, pos.z);
+    if (!debugView.free) camera.position.set(pos.x, pos.y + EYE_OFFSET, pos.z);
 
     const { forward, backward, left, right, run } = getKeys();
     const state = useVillage.getState();
