@@ -1,60 +1,65 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useRef } from "react";
-import { Color, InstancedMesh, Object3D } from "three";
+import { useEffect, useMemo } from "react";
 
-import { VOXEL, type Voxel } from "./builders";
+import { meshVoxels, type MeshVoxel } from "./mesher";
+import { glassMaterial, glowMaterial, voxelMaterial } from "./materials";
+import { VOXEL } from "./builders";
 
 interface VoxelModelProps {
-  voxels: Voxel[];
-  /** Per-axis scale of each cube relative to VOXEL (e.g. flat tiles). */
-  scale?: [number, number, number];
-  /** Vertical offset added to every voxel. */
-  yOffset?: number;
+  voxels: MeshVoxel[];
+  /** Edge length of the cubes in this model (default: the 0.5 m world voxel). */
+  size?: number;
   castShadow?: boolean;
   receiveShadow?: boolean;
+  /** Gentle wind sway amount (leaves ≈ 0.02, grass ≈ 0.12). */
+  sway?: number;
+  jitter?: number;
+  ao?: number;
+  skipBottom?: boolean;
+  glow?: number;
 }
 
-const UNIT_SCALE: [number, number, number] = [1, 1, 1];
-
-/** Renders many colored cubes in ONE draw call via an InstancedMesh. */
+/**
+ * Renders a voxel list as merged, face-culled geometry with baked ambient
+ * occlusion: one draw call per material (solid / glow / glass).
+ */
 export function VoxelModel({
   voxels,
-  scale = UNIT_SCALE,
-  yOffset = 0,
+  size = VOXEL,
   castShadow = true,
   receiveShadow = true,
+  sway = 0,
+  jitter,
+  ao,
+  skipBottom,
+  glow = 2.4,
 }: VoxelModelProps) {
-  const ref = useRef<InstancedMesh>(null);
-  const count = voxels.length;
-  const tmp = useMemo(() => new Object3D(), []);
-  const color = useMemo(() => new Color(), []);
+  const geo = useMemo(
+    () => meshVoxels(voxels, { size, jitter, ao, skipBottom }),
+    [voxels, size, jitter, ao, skipBottom],
+  );
+  useEffect(
+    () => () => {
+      geo.solid?.dispose();
+      geo.glow?.dispose();
+      geo.glass?.dispose();
+    },
+    [geo],
+  );
 
-  useLayoutEffect(() => {
-    const mesh = ref.current;
-    if (!mesh) return;
-    voxels.forEach((v, i) => {
-      tmp.position.set(v.x, v.y + yOffset, v.z);
-      tmp.scale.set(scale[0], scale[1], scale[2]);
-      tmp.updateMatrix();
-      mesh.setMatrixAt(i, tmp.matrix);
-      mesh.setColorAt(i, color.set(v.color));
-    });
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    mesh.computeBoundingSphere();
-  }, [voxels, scale, yOffset, tmp, color]);
-
-  if (count === 0) return null;
   return (
-    <instancedMesh
-      ref={ref}
-      args={[undefined, undefined, count]}
-      castShadow={castShadow}
-      receiveShadow={receiveShadow}
-    >
-      <boxGeometry args={[VOXEL, VOXEL, VOXEL]} />
-      <meshLambertMaterial />
-    </instancedMesh>
+    <>
+      {geo.solid && (
+        <mesh
+          geometry={geo.solid}
+          material={voxelMaterial(sway)}
+          castShadow={castShadow}
+          receiveShadow={receiveShadow}
+        />
+      )}
+      {geo.glow && <mesh geometry={geo.glow} material={glowMaterial(glow)} />}
+      {geo.glass && <mesh geometry={geo.glass} material={glassMaterial()} renderOrder={2} />}
+    </>
   );
 }
