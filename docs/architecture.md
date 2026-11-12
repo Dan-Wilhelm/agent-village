@@ -240,9 +240,10 @@ What the ClickUp API research showed (sources in the research notes; checked 202
 
 ## 6. Data model (Postgres, first version)
 
+The owner is not stored in the database: the owner check uses `OWNER_EMAIL` (verified email) and optionally `OWNER_USER_ID` (Clerk user id) from the environment, which keeps a leaked database from changing who may log in.
+
 | Table | Content |
 |---|---|
-| `owner` | The single owner (Clerk user id); used for the server-side owner check |
 | `workspaces` | Work environments (one for the MVP, many later) |
 | `integration_accounts` | Per workspace: provider (`clickup`), encrypted token, selected spaces |
 | `clickup_*` cache | Spaces, folders, lists, statuses, tasks, docs index, with sync timestamps |
@@ -259,6 +260,30 @@ What the ClickUp API research showed (sources in the research notes; checked 202
 | `push_subscriptions` | Web Push endpoints of my devices |
 
 ---
+
+### 6.1 ClickUp sync (implemented in Phase 2)
+
+- **Connect:** the owner enters a personal token in `/settings`.
+  - It is validated against ClickUp (`GET /user`, `GET /team`).
+  - It is stored with AES-256-GCM, bound to the account row.
+- **Choose scope:** the owner picks the ClickUp workspace and the spaces to sync. Only those spaces are copied.
+- **Full sync:**
+  - Hierarchy: spaces, folders and lists.
+  - All open tasks (subtasks included, 100 per page).
+  - Tasks not seen in a run are deleted. Closed and archived tasks are never kept.
+- **Live updates:**
+  - One team-wide ClickUp webhook for task events is registered automatically on the deployed app.
+  - Every webhook call is verified by its HMAC signature.
+  - The changed task is re-read from ClickUp; the payload is not trusted.
+- **Catch-up:**
+  - Vercel Cron runs `/api/cron/clickup-sync` every 15 minutes, protected by `CRON_SECRET`.
+  - It runs an incremental sync (`date_updated_gt` cursor).
+  - A full sync runs at least daily.
+- **Rate limits:** the client keeps itself under 90 requests per minute and honours `X-RateLimit-Reset` on HTTP 429.
+- **HQ overview:**
+  - Owner-only server actions read from the cache.
+  - Comments are fetched live per task.
+  - Task content is rendered as plain text, never as HTML.
 
 ## 7. Security
 
