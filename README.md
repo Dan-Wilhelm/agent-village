@@ -9,7 +9,7 @@ AI agents (powered by Claude) live in the village. They:
 - learn from your training and feedback;
 - do approved work in your tools, starting with ClickUp.
 
-> **Status: Phase 1 of 6 done** — login with owner lock and the first-person village with demo agents. Real agents and ClickUp come in Phases 2–4. See [`docs/architecture.md`](docs/architecture.md) for the full design and roadmap.
+> **Status: Phase 2 of 6 done** — owner-locked login, the first-person village with demo agents, and the ClickUp connection (settings, encrypted token, sync + webhooks, task overview in ClickUp HQ). Real agents come in Phases 3–4. See [`docs/architecture.md`](docs/architecture.md) for the full design and roadmap.
 
 ## Highlights (planned)
 
