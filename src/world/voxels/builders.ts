@@ -315,11 +315,6 @@ export function buildDesk(): { voxels: Voxel[]; collider: BoxCollider } {
       if (leg) out.push({ x: ox + (i + 0.5) * VOXEL, y: VOXEL * 0.5, z: oz + (j + 0.5) * VOXEL, color: PALETTE.woodDark });
     }
   }
-  // A little plant and a lamp on the desk
-  out.push({ x: DESK.x - 1.0, y: VOXEL * 2.5, z: DESK.z, color: PALETTE.trunk });
-  out.push({ x: DESK.x - 1.0, y: VOXEL * 3.5, z: DESK.z, color: PALETTE.leafLight });
-  out.push({ x: DESK.x + 1.0, y: VOXEL * 2.5, z: DESK.z, color: PALETTE.woodDark });
-  out.push({ x: DESK.x + 1.0, y: VOXEL * 3.5, z: DESK.z, color: PALETTE.lantern });
   return {
     voxels: out,
     collider: { center: [DESK.x, DESK.height / 2, DESK.z], halfExtents: [DESK.width / 2, DESK.height / 2, DESK.depth / 2] },

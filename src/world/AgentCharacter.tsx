@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
+import { useRapier } from "@react-three/rapier";
 import type { Group } from "three";
 
 import { DESK } from "./layout";
@@ -17,6 +18,9 @@ const STATUS_ICON: Record<AgentStatus, string> = {
   training: "🎓",
   error: "⚠️",
 };
+
+const LABEL_MAX_DISTANCE = 28;
+const HEAD_HEIGHT = 1.5;
 
 const EYE = "#2b1d14";
 const BLUSH = "#ff9aa8";
@@ -33,12 +37,35 @@ export function AgentCharacter({ agent }: { agent: AgentView }) {
   const mode = useVillage((s) => s.mode);
   const openInteraction = useVillage((s) => s.openInteraction);
   const waitingWith = useVillage((s) => interactionOf(s, agent.id));
+  const { world, rapier } = useRapier();
+  const [labelVisible, setLabelVisible] = useState(true);
+  const visibilityTimer = useRef(0);
 
-  useFrame((state) => {
+  useFrame((state, delta) => {
     const m = movers.get(agent.id);
     const g = root.current;
     if (!m || !g) return;
     g.position.set(m.x, 0, m.z);
+
+    // Hide labels when far away or when a wall is between the agent and the camera
+    // (labels are HTML overlays, so they would otherwise shine through walls).
+    visibilityTimer.current -= delta;
+    if (visibilityTimer.current <= 0) {
+      visibilityTimer.current = 0.2;
+      const cam = state.camera.position;
+      const dx = cam.x - m.x;
+      const dy = cam.y - HEAD_HEIGHT;
+      const dz = cam.z - m.z;
+      const dist = Math.hypot(dx, dy, dz);
+      let visible = dist < LABEL_MAX_DISTANCE;
+      if (visible && dist > 0.8) {
+        // Cast from the head towards the camera, stopping before the player's own capsule.
+        const ray = new rapier.Ray({ x: m.x, y: HEAD_HEIGHT, z: m.z }, { x: dx / dist, y: dy / dist, z: dz / dist });
+        const hit = world.castRay(ray, dist - 0.6, true);
+        if (hit) visible = false;
+      }
+      if (visible !== labelVisible) setLabelVisible(visible);
+    }
     // Smoothly turn towards the walking direction (or face the owner's desk while waiting).
     const facingDesk = agent.status === "waiting" && !isMoving(agent.id);
     const targetHeading = facingDesk ? Math.atan2(DESK.x - m.x, DESK.z - m.z) : m.heading;
@@ -133,8 +160,8 @@ export function AgentCharacter({ agent }: { agent: AgentView }) {
       </group>
 
       {/* status icon + speech bubble */}
-      <Html position={[0, 1.95, 0]} center distanceFactor={9} zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
-        <div className="flex flex-col items-center gap-1 select-none">
+      <Html position={[0, 1.95, 0]} center zIndexRange={[20, 0]} pointerEvents="none">
+        <div className={`flex flex-col items-center gap-1 select-none transition-opacity duration-200 ${labelVisible ? "opacity-100" : "opacity-0"}`}>
           {showBubble && (
             <div className="whitespace-nowrap rounded-2xl border-2 border-wood bg-cream px-3 py-1.5 text-sm font-extrabold text-ink shadow-md">
               {agent.bubble}

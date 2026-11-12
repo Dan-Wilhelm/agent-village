@@ -32,13 +32,13 @@ const FACING_ROTATION: Record<Facing, number> = {
 };
 
 const PATH_SCALE: [number, number, number] = [1, 0.12, 1];
-const FLOWER_SCALE: [number, number, number] = [0.35, 0.5, 0.35];
+const FLOWER_SCALE: [number, number, number] = [0.22, 0.3, 0.22];
 
 export default function Scene() {
   return (
     <KeyboardControls map={KEYMAP as unknown as { name: string; keys: string[] }[]}>
       <Canvas
-        shadows
+        shadows="percentage"
         dpr={[1, 1.75]}
         camera={{ fov: 70, near: 0.1, far: 260, position: [PLAYER_SPAWN.x, 1.6, PLAYER_SPAWN.z] }}
         onPointerMissed={() => sceneBridge.lock()}
@@ -47,7 +47,9 @@ export default function Scene() {
         <color attach="background" args={["#cfe9ff"]} />
         <fog attach="fog" args={["#cfe9ff", 45, 120]} />
         <Sky sunPosition={[100, 60, 40]} turbidity={3} rayleigh={1.1} mieCoefficient={0.004} />
-        <hemisphereLight args={["#dff1ff", "#8fd17a", 1.1]} />
+        {/* warm bounce light (a green ground color made interiors look dull) */}
+        <hemisphereLight args={["#e6f4ff", "#f1d9b5", 1.15]} />
+        <ambientLight intensity={0.35} color="#fff1dc" />
         <directionalLight
           castShadow
           position={[25, 40, 18]}
@@ -67,8 +69,9 @@ export default function Scene() {
         <Physics gravity={[0, -20, 0]}>
           <World />
           <Player />
+          {/* agents sit inside Physics so their labels can raycast against walls */}
+          <Agents />
         </Physics>
-        <Agents />
         <AgentSystem />
       </Canvas>
     </KeyboardControls>
@@ -128,20 +131,65 @@ function World() {
       </mesh>
 
       <VoxelModel voxels={paths} scale={PATH_SCALE} yOffset={0.03} castShadow={false} />
-      <VoxelModel voxels={decorations.flowers} scale={FLOWER_SCALE} yOffset={0.125} castShadow={false} />
+      <VoxelModel voxels={decorations.flowers} scale={FLOWER_SCALE} yOffset={0.075} castShadow={false} />
       <VoxelModel voxels={decorations.trees} />
 
       {houses.map(({ def, voxels }) => (
         <group key={def.id}>
           <VoxelModel voxels={voxels} />
           <Floor def={def} />
+          <Ceiling def={def} />
           <BuildingSign def={def} />
         </group>
       ))}
       <VoxelModel voxels={field.voxels} />
       <BuildingSign def={field.def} />
       <VoxelModel voxels={desk.voxels} />
+      <DeskProps />
     </>
+  );
+}
+
+/** Flat ceiling at wall height so the inside feels like a cozy room, not an attic. */
+function Ceiling({ def }: { def: BuildingDef }) {
+  return (
+    <mesh rotation={[Math.PI / 2, 0, 0]} position={[def.center.x, def.wallHeight - 0.01, def.center.z]}>
+      <planeGeometry args={[def.size.x - 0.5, def.size.z - 0.5]} />
+      <meshLambertMaterial color={PALETTE.plasterWarm} />
+    </mesh>
+  );
+}
+
+/** Small plant and lamp at the desk's back corners (below eye level). */
+function DeskProps() {
+  const top = DESK.height + 0.1;
+  return (
+    <group>
+      <group position={[DESK.x - DESK.width / 2 + 0.25, top, DESK.z - 0.3]}>
+        <mesh position={[0, 0.09, 0]} castShadow>
+          <boxGeometry args={[0.2, 0.18, 0.2]} />
+          <meshLambertMaterial color={PALETTE.trunk} />
+        </mesh>
+        <mesh position={[0, 0.3, 0]} castShadow>
+          <boxGeometry args={[0.3, 0.26, 0.3]} />
+          <meshLambertMaterial color={PALETTE.leafLight} />
+        </mesh>
+      </group>
+      <group position={[DESK.x + DESK.width / 2 - 0.25, top, DESK.z - 0.3]}>
+        <mesh position={[0, 0.03, 0]}>
+          <boxGeometry args={[0.22, 0.06, 0.22]} />
+          <meshLambertMaterial color={PALETTE.woodDark} />
+        </mesh>
+        <mesh position={[0, 0.22, 0]}>
+          <boxGeometry args={[0.05, 0.34, 0.05]} />
+          <meshLambertMaterial color={PALETTE.woodDark} />
+        </mesh>
+        <mesh position={[0, 0.42, 0]}>
+          <boxGeometry args={[0.26, 0.16, 0.26]} />
+          <meshBasicMaterial color={PALETTE.lantern} />
+        </mesh>
+      </group>
+    </group>
   );
 }
 
@@ -166,5 +214,23 @@ function BuildingSign({ def }: { def: BuildingDef }) {
     west: [def.center.x - hx - out, y, def.center.z + along],
     east: [def.center.x + hx + out, y, def.center.z + along],
   };
-  return <Sign title={def.name} subtitle={def.subtitle} position={pos[def.door]} rotationY={FACING_ROTATION[def.door]} />;
+  const [x, , z] = pos[def.door];
+  return (
+    <group>
+      <Sign title={def.name} subtitle={def.subtitle} position={pos[def.door]} rotationY={FACING_ROTATION[def.door]} />
+      {def.kind === "field" &&
+        [-1, 1].map((side) => {
+          // two posts under the free-standing field sign, offset along the sign's width
+          const alongX = def.door === "north" || def.door === "south";
+          const px = alongX ? x + side * 1.1 : x + 0.05;
+          const pz = alongX ? z + 0.05 : z + side * 1.1;
+          return (
+            <mesh key={side} position={[px, (y - 0.4) / 2, pz]} castShadow>
+              <boxGeometry args={[0.12, y - 0.4, 0.12]} />
+              <meshLambertMaterial color={PALETTE.woodDark} />
+            </mesh>
+          );
+        })}
+    </group>
+  );
 }

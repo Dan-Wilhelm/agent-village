@@ -9,7 +9,7 @@ AI agents (powered by Claude) live in the village. They:
 - learn from your training and feedback;
 - do approved work in your tools, starting with ClickUp.
 
-> **Status: early development (Phase 1 of 6).** Not usable yet. See [`docs/architecture.md`](docs/architecture.md) for the full design and roadmap.
+> **Status: Phase 1 of 6 done** — login with owner lock and the first-person village with demo agents. Real agents and ClickUp come in Phases 2–4. See [`docs/architecture.md`](docs/architecture.md) for the full design and roadmap.
 
 ## Highlights (planned)
 
@@ -31,6 +31,9 @@ Next.js 16 · TypeScript · React Three Fiber · Claude API (`@anthropic-ai/sdk`
 
 Each person who runs Agent Village brings their own accounts and keys: Vercel, Neon, Clerk, an Anthropic API key and a ClickUp personal token.
 A step-by-step setup guide will be added in Phase 6. Until then:
+
+- In Clerk, restrict sign-ups to your own address (allowlist) and set `OWNER_EMAIL` to the same address.
+- Optionally set `OWNER_USER_ID` to your Clerk user id after the first sign-in (a second lock).
 
 ```bash
 cp .env.example .env.local   # fill in your own values — never commit this file
