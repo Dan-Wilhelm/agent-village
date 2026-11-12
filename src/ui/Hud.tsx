@@ -1,7 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { UserButton } from "@clerk/nextjs";
 
+import { ClickUpHqPanel } from "@/ui/hq/ClickUpHqPanel";
+import { useUi } from "@/ui/uiStore";
 import { sceneBridge } from "@/world/controls";
 import { useVillage } from "@/world/store";
 
@@ -13,6 +16,8 @@ export function Hud({ ownerName }: { ownerName: string }) {
   const panelOpen = useVillage((s) => s.openInteractionId !== null);
   const openInteraction = useVillage((s) => s.openInteraction);
   const nearby = nearbyAgentId ? agents[nearbyAgentId] : undefined;
+  const openHq = useUi((s) => s.openHq);
+  const hqOpen = useUi((s) => s.hqOpen);
 
   return (
     <div className="pointer-events-none absolute inset-0 select-none">
@@ -25,13 +30,28 @@ export function Hud({ ownerName }: { ownerName: string }) {
             ? "WASD to walk · Shift to run · E to talk · Esc to free the mouse"
             : "Click the world to walk around · click a waiting agent to talk"}
         </p>
-        <button
-          type="button"
-          onClick={() => sceneBridge.toDesk()}
-          className="cozy-button mt-2 bg-parchment px-3 py-1 text-xs"
-        >
-          Back to my desk
-        </button>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              sceneBridge.unlock();
+              openHq();
+            }}
+            className="cozy-button bg-[#d9c3f0] px-3 py-1 text-xs"
+          >
+            ClickUp HQ
+          </button>
+          <button
+            type="button"
+            onClick={() => sceneBridge.toDesk()}
+            className="cozy-button bg-parchment px-3 py-1 text-xs"
+          >
+            Back to my desk
+          </button>
+          <Link href="/settings" className="cozy-button bg-parchment px-3 py-1 text-xs">
+            Settings
+          </Link>
+        </div>
       </div>
 
       {/* top-right: who is waiting + account */}
@@ -78,7 +98,7 @@ export function Hud({ ownerName }: { ownerName: string }) {
       </div>
 
       {/* crosshair in walk mode */}
-      {mode === "walk" && !panelOpen && (
+      {mode === "walk" && !panelOpen && !hqOpen && (
         <div className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-cream/90 ring-2 ring-ink/40" />
       )}
 
@@ -94,6 +114,10 @@ export function Hud({ ownerName }: { ownerName: string }) {
           )}
         </div>
       )}
+
+      <div className="pointer-events-auto">
+        <ClickUpHqPanel />
+      </div>
 
       {/* phase badge */}
       <div className="absolute bottom-4 right-4 rounded-full bg-ink/70 px-3 py-1 text-xs font-bold text-cream">
