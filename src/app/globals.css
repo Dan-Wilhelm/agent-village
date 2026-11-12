@@ -1,26 +1,66 @@
 @import "tailwindcss";
 
+/* Cozy palette shared by the 2D UI. The 3D world uses src/world/palette.ts. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --cream: #fff8ee;
+  --parchment: #f6e7cf;
+  --wood: #8b5e3c;
+  --wood-dark: #5c3b24;
+  --leaf: #6cbf5b;
+  --sky: #bfe3ff;
+  --berry: #e8657a;
+  --ink: #3b2a1e;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-cream: var(--cream);
+  --color-parchment: var(--parchment);
+  --color-wood: var(--wood);
+  --color-wood-dark: var(--wood-dark);
+  --color-leaf: var(--leaf);
+  --color-sky: var(--sky);
+  --color-berry: var(--berry);
+  --color-ink: var(--ink);
+  --font-sans: var(--font-nunito);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+html,
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--parchment);
+  color: var(--ink);
+  font-family: var(--font-nunito), ui-rounded, system-ui, sans-serif;
+}
+
+/* Wooden "card" used by panels and the HUD. */
+.cozy-card {
+  background: var(--cream);
+  border: 3px solid var(--wood);
+  border-radius: 18px;
+  box-shadow:
+    0 4px 0 var(--wood-dark),
+    0 12px 30px rgb(59 42 30 / 0.25);
+}
+
+.cozy-button {
+  border-radius: 12px;
+  border: 2px solid var(--wood-dark);
+  box-shadow: 0 3px 0 var(--wood-dark);
+  font-weight: 800;
+  transition:
+    transform 80ms ease,
+    box-shadow 80ms ease;
+}
+.cozy-button:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 var(--wood-dark);
+}
+.cozy-button:focus-visible {
+  outline: 3px solid var(--sky);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cozy-button {
+    transition: none;
+  }
 }
