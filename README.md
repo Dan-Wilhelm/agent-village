@@ -1,36 +1,48 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Agent Village
 
-## Getting Started
+A cozy, voxel-style 3D world in first-person view that works as your personal control center for work.
+AI agents (powered by Claude) live in the village. They:
 
-First, run the development server:
+- walk up to your office;
+- tell you what they need in speech bubbles;
+- show you tasks and lists;
+- learn from your training and feedback;
+- do approved work in your tools, starting with ClickUp.
+
+> **Status: early development (Phase 1 of 6).** Not usable yet. See [`docs/architecture.md`](docs/architecture.md) for the full design and roadmap.
+
+## Highlights (planned)
+
+- **First-person village.** Your office, ClickUp HQ and other buildings. All art is generated in code from blocks.
+- **Agents as characters.** Each agent has a role and a schedule or is called on demand. Its walking and status show what it is really doing.
+- **One input, the right agent.** Type, say or drop what you want. The Dispatcher picks the matching agent, and that agent comes running.
+- **Training and feedback.** Agents introduce themselves, ask what they need, and turn your feedback into versioned, editable playbooks.
+- **You stay in control.** Every write action needs your approval unless you allow it explicitly, and everything goes into an audit log.
+- **Single-owner and secure.**
+  - Login is required, with a passkey or 2FA.
+  - Sign-ups are disabled.
+  - API tokens are encrypted server-side.
+
+## Tech stack
+
+Next.js 16 · TypeScript · React Three Fiber · Claude API (`@anthropic-ai/sdk`) · Vercel Workflow · Neon Postgres + Drizzle · Clerk · Web Push
+
+## Self-hosting
+
+Each person who runs Agent Village brings their own accounts and keys: Vercel, Neon, Clerk, an Anthropic API key and a ClickUp personal token.
+A step-by-step setup guide will be added in Phase 6. Until then:
 
 ```bash
+cp .env.example .env.local   # fill in your own values — never commit this file
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Security
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Never commit secrets. `.env*` files are ignored except `.env.example`, which contains placeholders only.
+If you find a security issue, please open a private security advisory on GitHub instead of a public issue.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## License
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+MIT, see [LICENSE](LICENSE).
