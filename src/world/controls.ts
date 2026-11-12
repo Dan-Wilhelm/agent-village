@@ -19,6 +19,8 @@ interface PointerLockApi {
 }
 interface PlayerApi {
   toDesk: () => void;
+  /** Moves the player; yaw in radians (0 = looking north). */
+  teleport: (x: number, z: number, yaw: number) => void;
 }
 
 let pointerLock: PointerLockApi | null = null;
@@ -40,4 +42,12 @@ export const sceneBridge = {
   toDesk() {
     player?.toDesk();
   },
+  teleport(x: number, z: number, yaw = 0) {
+    player?.teleport(x, z, yaw);
+  },
 };
+
+// Development-only debug handle (used for automated screenshots). Never shipped to production.
+if (process.env.NODE_ENV === "development" && typeof window !== "undefined") {
+  (window as unknown as { __agentVillage?: typeof sceneBridge }).__agentVillage = sceneBridge;
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { PointerLockControls, useKeyboardControls } from "@react-three/drei";
 import { CapsuleCollider, RigidBody, type RapierRigidBody } from "@react-three/rapier";
@@ -25,6 +25,27 @@ export function Player() {
   const [subscribe, getKeys] = useKeyboardControls<ControlName>();
   const setMode = useVillage((s) => s.setMode);
   const panelOpen = useVillage((s) => s.openInteractionId !== null);
+  const setEvents = useThree((s) => s.setEvents);
+  const onLock = useCallback(() => setMode("walk"), [setMode]);
+  const onUnlock = useCallback(() => setMode("desk"), [setMode]);
+
+  // drei's PointerLockControls aims ALL clicks at the screen center while mounted.
+  // That is right for the crosshair in walk mode, but in desk mode the mouse is free
+  // and clicks must hit what is under the cursor. This effect runs after drei's
+  // (child effects run first), so our rule wins.
+  useEffect(() => {
+    setEvents({
+      compute(event, state) {
+        if (useVillage.getState().mode === "walk") {
+          state.pointer.set(0, 0);
+        } else {
+          const e = event as PointerEvent;
+          state.pointer.set((e.offsetX / state.size.width) * 2 - 1, -(e.offsetY / state.size.height) * 2 + 1);
+        }
+        state.raycaster.setFromCamera(state.pointer, state.camera);
+      },
+    });
+  }, [setEvents]);
 
   const direction = useRef(new Vector3());
   const euler = useRef(new Euler(0, 0, 0, "YXZ"));
@@ -42,6 +63,11 @@ export function Player() {
         body.current?.setTranslation({ x: PLAYER_SPAWN.x, y: 1, z: PLAYER_SPAWN.z }, true);
         body.current?.setLinvel({ x: 0, y: 0, z: 0 }, true);
         camera.rotation.set(0, 0, 0, "YXZ");
+      },
+      teleport: (x, z, yaw) => {
+        body.current?.setTranslation({ x, y: 1, z }, true);
+        body.current?.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        camera.rotation.set(0, yaw, 0, "YXZ");
       },
     });
     return () => {
@@ -115,8 +141,8 @@ export function Player() {
       <PointerLockControls
         ref={controls}
         selector="#av-no-auto-lock"
-        onLock={() => setMode("walk")}
-        onUnlock={() => setMode("desk")}
+        onLock={onLock}
+        onUnlock={onUnlock}
       />
       <RigidBody
         ref={body}

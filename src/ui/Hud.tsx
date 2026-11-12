@@ -60,7 +60,12 @@ export function Hud({ ownerName }: { ownerName: string }) {
                         aria-hidden
                       />
                       <span className="min-w-0">
-                        <span className="block truncate text-sm font-bold">{a?.name ?? "Agent"}</span>
+                        <span className="block truncate text-sm font-bold">
+                          {a?.name ?? "Agent"}
+                          {a?.status === "walking" && (
+                            <span className="ml-1 text-xs font-semibold text-ink/50">· on the way</span>
+                          )}
+                        </span>
                         <span className="block truncate text-xs text-ink/70">{q.title}</span>
                       </span>
                     </button>
@@ -91,7 +96,7 @@ export function Hud({ ownerName }: { ownerName: string }) {
       )}
 
       {/* phase badge */}
-      <div className="absolute bottom-4 left-4 rounded-full bg-ink/70 px-3 py-1 text-xs font-bold text-cream">
+      <div className="absolute bottom-4 right-4 rounded-full bg-ink/70 px-3 py-1 text-xs font-bold text-cream">
         Demo agents · real agents arrive in Phase 3–4
       </div>
     </div>
