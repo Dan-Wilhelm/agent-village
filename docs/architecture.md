@@ -80,7 +80,7 @@ In this document "I/me" is the owner, the one person who uses an Agent Village i
   - Further buildings for later functions: Workshop (task creation), Library (meeting docs), Training Ground.
 - **Style**
   - Cozy and cute, voxel-style.
-  - All geometry and characters are generated in code from blocks (instanced meshes), so the art is original and the bundle stays small.
+  - All geometry and characters are generated in code from blocks, merged into one mesh per material with hidden faces removed and soft corner shading baked in (`src/world/voxels/mesher.ts`), so the art is original and the bundle stays small.
   - Characters are blocky, low-poly and have individual colors and accessories set in the wizard.
 - **First person**
   - Pointer-lock controls (WASD + mouse), with collision through Rapier.

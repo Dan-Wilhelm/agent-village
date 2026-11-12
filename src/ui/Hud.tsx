@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
 import { UserButton } from "@clerk/nextjs";
 
@@ -18,6 +19,16 @@ export function Hud({ ownerName }: { ownerName: string }) {
   const nearby = nearbyAgentId ? agents[nearbyAgentId] : undefined;
   const openHq = useUi((s) => s.openHq);
   const hqOpen = useUi((s) => s.hqOpen);
+
+  // Walking into ClickUp HQ opens the task overview.
+  useEffect(() => {
+    sceneBridge.onEnterBuilding((building) => {
+      if (building !== "hq") return;
+      sceneBridge.unlock();
+      openHq();
+    });
+    return () => sceneBridge.onEnterBuilding(null);
+  }, [openHq]);
 
   return (
     <div className="pointer-events-none absolute inset-0 select-none">
