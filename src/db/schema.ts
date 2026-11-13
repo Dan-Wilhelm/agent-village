@@ -139,3 +139,6 @@ export const activityLog = pgTable(
   },
   (t) => [index("activity_log_at").on(t.at)],
 );
+
+// Better Auth tables (login): user, session, account, verification, passkey, rateLimit
+export * from "./auth-schema";

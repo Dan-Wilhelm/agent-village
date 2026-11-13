@@ -25,15 +25,16 @@ AI agents (powered by Claude) live in the village. They:
 
 ## Tech stack
 
-Next.js 16 · TypeScript · React Three Fiber · Claude API (`@anthropic-ai/sdk`) · Vercel Workflow · Neon Postgres + Drizzle · Clerk · Web Push
+Next.js 16 · TypeScript · React Three Fiber · Claude API (`@anthropic-ai/sdk`) · Vercel Workflow · Neon Postgres + Drizzle · Better Auth (Google + passkeys) · Web Push
 
 ## Self-hosting
 
-Each person who runs Agent Village brings their own accounts and keys: Vercel, Neon, Clerk, an Anthropic API key and a ClickUp personal token.
+Each person who runs Agent Village brings their own accounts and keys: Vercel, Neon, a Google OAuth client, an Anthropic API key and a ClickUp personal token.
 A step-by-step setup guide will be added in Phase 6. Until then:
 
-- In Clerk, restrict sign-ups to your own address (allowlist) and set `OWNER_EMAIL` to the same address.
-- Optionally set `OWNER_USER_ID` to your Clerk user id after the first sign-in (a second lock).
+- Set `OWNER_EMAIL` to your Google account's address — nobody else can sign in or sign up.
+- Create a Google OAuth client with the redirect URI `<your URL>/api/auth/callback/google`.
+- After the first Google sign-in, add a passkey in Settings. Optionally pin `OWNER_USER_ID` (a second lock).
 
 ```bash
 cp .env.example .env.local   # fill in your own values — never commit this file

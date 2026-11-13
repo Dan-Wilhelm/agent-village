@@ -1,5 +1,6 @@
 import { Suspense } from "react";
-import { SignIn } from "@clerk/nextjs";
+
+import { SignInCard } from "./SignInCard";
 
 export default function SignInPage() {
   return (
@@ -8,9 +9,9 @@ export default function SignInPage() {
         <h1 className="text-4xl font-black tracking-tight text-wood-dark">Agent Village</h1>
         <p className="mt-1 text-ink/70">Your agents are waiting for you.</p>
       </div>
-      {/* SignIn reads the URL, so it streams in after prerendering (Cache Components). */}
-      <Suspense fallback={<p className="text-ink/60">Loading sign-in…</p>}>
-        <SignIn />
+      {/* reads ?error= from the URL, so it streams in after prerendering (Cache Components) */}
+      <Suspense fallback={<div className="cozy-card h-56 w-full max-w-sm" />}>
+        <SignInCard />
       </Suspense>
     </main>
   );

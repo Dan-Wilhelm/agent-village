@@ -2,9 +2,9 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
-import { UserButton } from "@clerk/nextjs";
 
 import { ClickUpHqPanel } from "@/ui/hq/ClickUpHqPanel";
+import { SignOutButton } from "@/ui/SignOutButton";
 import { useUi } from "@/ui/uiStore";
 import { sceneBridge } from "@/world/controls";
 import { useVillage } from "@/world/store";
@@ -67,7 +67,7 @@ export function Hud({ ownerName }: { ownerName: string }) {
 
       {/* top-right: who is waiting + account */}
       <div className="pointer-events-auto absolute right-4 top-4 flex flex-col items-end gap-3">
-        <UserButton />
+        <SignOutButton className="cozy-button bg-cream px-3 py-1 text-xs" />
         <div className="cozy-card w-64 px-4 py-3">
           <p className="text-sm font-black text-wood-dark">
             Waiting for you {queue.length > 0 && <span className="text-berry">({queue.length})</span>}
