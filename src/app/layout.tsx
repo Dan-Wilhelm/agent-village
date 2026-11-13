@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import { Nunito } from "next/font/google";
-import { ClerkProvider } from "@clerk/nextjs";
 
 import "./globals.css";
 
@@ -22,10 +21,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${nunito.variable} h-full antialiased`}>
-      <body className="min-h-full flex flex-col">
-        {/* Clerk Core 3 with Cache Components: provider goes inside <body>. */}
-        <ClerkProvider>{children}</ClerkProvider>
-      </body>
+      <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );
 }

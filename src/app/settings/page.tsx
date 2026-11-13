@@ -11,6 +11,7 @@ import { NotAllowed } from "@/ui/NotAllowed";
 
 import { loadClickUpChoices } from "./actions";
 import { ClickUpSettings } from "./ClickUpSettings";
+import { PasskeySettings } from "./PasskeySettings";
 
 export const maxDuration = 300; // full syncs run inside server actions on this page
 
@@ -50,6 +51,7 @@ async function SettingsGate() {
             ← Back to the village
           </Link>
         </header>
+        <PasskeySettings />
         <ClickUpSettings
           account={
             account

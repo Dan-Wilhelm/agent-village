@@ -1,4 +1,4 @@
-import { SignOutButton } from "@clerk/nextjs";
+import { SignOutButton } from "@/ui/SignOutButton";
 
 const MESSAGES = {
   not_owner: {
@@ -18,9 +18,7 @@ export function NotAllowed({ reason }: { reason: keyof typeof MESSAGES }) {
       <div className="cozy-card max-w-md p-6 text-center">
         <h1 className="text-2xl font-black text-wood-dark">{msg.title}</h1>
         <p className="mt-2 text-ink/80">{msg.body}</p>
-        <SignOutButton>
-          <button className="cozy-button mt-5 bg-parchment px-4 py-2">Sign out</button>
-        </SignOutButton>
+        <SignOutButton className="cozy-button mt-5 bg-parchment px-4 py-2" />
       </div>
     </main>
   );

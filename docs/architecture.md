@@ -17,7 +17,7 @@ In this document "I/me" is the owner, the one person who uses an Agent Village i
 | Agent engine | Anthropic TypeScript SDK (`@anthropic-ai/sdk`), our own agent loop | Agents are database rows created in the app; full control over approvals |
 | Durable runs, waiting, schedules | Vercel Workflow (`workflow` package) | Agent runs survive restarts, can pause hours for an approval, can sleep until the next scheduled time |
 | Database | Neon Postgres (via Vercel Marketplace) + Drizzle ORM | Serverless Postgres, free tier, standard SQL for self-hosters |
-| Login | Clerk, sign-ups disabled, owner allowlist, passkey or 2FA required | Proven auth, no hand-rolled security; plus an owner check in our own code |
+| Login | Better Auth (open source, in our own database): Google OAuth or passkeys only, owner email only | No third-party login provider; full control; plus an owner check in our own code |
 | Secrets | AES-256-GCM encryption in Postgres, master key only in a Vercel sensitive env var | Tokens never reach the browser, logs or git |
 | Push notifications | Web Push (VAPID) to the installed PWA on the Mac | No extra service needed |
 | Voice input | Browser Web Speech API (German and English), push-to-talk | Free, no extra account; only active while I use the mic button |
@@ -44,7 +44,7 @@ In this document "I/me" is the owner, the one person who uses an Agent Village i
 ```
  Browser / PWA (Mac)                          Vercel (one Next.js project)
 ┌──────────────────────────┐   HTTPS + auth   ┌───────────────────────────────────────────┐
-│ 3D Village (R3F)         │ ───────────────► │ API routes (Clerk-protected)             │
+│ 3D Village (R3F)         │ ───────────────► │ API routes (owner-only sessions)         │
 │  • first-person office   │ ◄─── SSE ─────── │  • world state / agent events stream      │
 │  • walking agents        │                  │  • approve / reject / feedback / train    │
 │  • speech bubbles        │                  │  • agent wizard, settings, tokens         │
@@ -240,7 +240,7 @@ What the ClickUp API research showed (sources in the research notes; checked 202
 
 ## 6. Data model (Postgres, first version)
 
-The owner is not stored in the database: the owner check uses `OWNER_EMAIL` (verified email) and optionally `OWNER_USER_ID` (Clerk user id) from the environment, which keeps a leaked database from changing who may log in.
+The owner is not stored in the database: the owner check uses `OWNER_EMAIL` (verified email) and optionally `OWNER_USER_ID` (the owner's user id) from the environment, which keeps a leaked database from changing who may log in.
 
 | Table | Content |
 |---|---|
@@ -288,11 +288,12 @@ The owner is not stored in the database: the owner check uses `OWNER_EMAIL` (ver
 ## 7. Security
 
 1. **Login**
-   - Clerk with **sign-ups disabled** and an **allowlist** containing only your address.
-   - **Passkey or 2FA required.**
-   - Short sessions.
+   - Better Auth (Phase 2.5, replacing Clerk): sign-in only with **Google** (verified email) or a **passkey**; no passwords, no magic links.
+   - Three independent locks: Google profile check, no user creation except the owner, no session for anyone but the owner (covers passkeys).
+   - Sessions last 7 days (refreshed daily while in use), httpOnly + Secure cookies, rate limiting in the database, CSRF/origin checks on.
+   - Recommended: 2-step verification on the owner's Google account, which becomes the main key.
 2. **Defense in depth**
-   - Every server route and server action checks *both* that a valid session exists *and* that the user is the owner stored in the database.
+   - Every server route and server action checks *both* that a valid session exists *and* that the user is the owner (`OWNER_EMAIL`, verified; optional `OWNER_USER_ID`).
    - Middleware alone is not trusted.
 3. **No public endpoints except signed ones**
    - The ClickUp webhook is verified by HMAC signature, with replay protection by event id.
@@ -326,7 +327,7 @@ The owner is not stored in the database: the owner check uses `OWNER_EMAIL` (ver
 | Claude API | Simple agents on Haiku 5.5 ($0.10 / $0.50 per million tokens) cost almost nothing. A daily briefing on Opus 5.5 costs ≈ $0.10–0.30 a day. **Total probably $10–30/month**, depending on how much you use the consultant agents. |
 | Vercel | Pro plan (already in place). Workflow, functions and bandwidth are billed by usage on top; small for one user. |
 | Neon Postgres | Free tier is enough to start. |
-| Clerk | Free tier is enough (1 user). |
+| Login | Free (Better Auth is open source; Google OAuth is free). |
 
 ---
 
