@@ -411,13 +411,19 @@ const TOOLS: Record<string, ToolDef> = {
   },
 };
 
+/** Tolerant name match: dashes (–, —, -), spacing and case don't matter. */
+export function sameListName(a: string, b: string) {
+  const norm = (x: string) => x.replace(/[\u2012-\u2015-]/g, "-").replace(/\s+/g, " ").trim().toLowerCase();
+  return norm(a) === norm(b);
+}
+
 async function findDraftsList(ctx: ToolContext): Promise<string> {
   const account = requireAccount(ctx);
   const client = clientFor(account);
   const { spaces } = await client.getSpaces(account.teamId!);
   for (const s of spaces.filter((x) => account.selectedSpaceIds.includes(x.id))) {
     const { lists } = await client.getFolderlessLists(s.id);
-    const hit = lists.find((l) => l.name === ctx.draftsListName);
+    const hit = lists.find((l) => sameListName(l.name, ctx.draftsListName));
     if (hit) return hit.id;
   }
   throw new Error(`The drafts list “${ctx.draftsListName}” does not exist yet. Ask Dan to create it in Settings.`);
