@@ -13,6 +13,7 @@
     "db:migrate": "dotenv -e .env.local -- drizzle-kit migrate"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
     "@better-auth/passkey": "^1.7.22",
     "@neondatabase/serverless": "^1.2.0",
     "@react-three/drei": "^10.7.9",

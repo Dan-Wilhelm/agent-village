@@ -10,6 +10,7 @@
 import { z } from "zod";
 
 const BASE = "https://api.clickup.com/api/v2";
+const BASE_V3 = "https://api.clickup.com/api/v3";
 const REQUESTS_PER_MINUTE = 90; // safety margin below 100
 
 export class ClickUpError extends Error {
@@ -131,7 +132,40 @@ export type TeamTasksQuery = {
   dateUpdatedGtMs?: number;
   /** Skip markdown descriptions (smaller pages for overviews). */
   withDescriptions?: boolean;
+  statuses?: string[];
+  listIds?: string[];
+  assignees?: string[];
+  dueDateLtMs?: number;
+  dueDateGtMs?: number;
 };
+
+export const createdTaskSchema = z.object({ id: z.coerce.string(), url: z.string().nullish() });
+export const commentCreatedSchema = z.object({ id: z.coerce.string() });
+export const chatChannelSchema = z.object({ data: z.object({ id: z.coerce.string() }) });
+export const chatMessagesSchema = z.object({
+  data: z
+    .array(z.object({ id: z.coerce.string(), user_id: z.coerce.string().nullish(), content: z.string().nullish(), date: ms }))
+    .default([]),
+});
+
+export interface NewTask {
+  name: string;
+  markdown_content?: string;
+  status?: string;
+  due_date?: number;
+  due_date_time?: boolean;
+  assignees?: number[];
+  priority?: number | null;
+  tags?: string[];
+}
+
+export interface TaskChange {
+  status?: string;
+  due_date?: number | null;
+  due_date_time?: boolean;
+  priority?: number | null;
+  assignees?: { add?: number[]; rem?: number[] };
+}
 
 export function createClickUpClient(opts: ClickUpClientOptions) {
   const fetchImpl = opts.fetchImpl ?? fetch;
@@ -156,9 +190,9 @@ export function createClickUpClient(opts: ClickUpClientOptions) {
     method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     schema: z.ZodType<T> | null,
-    init?: { query?: URLSearchParams; body?: unknown },
+    init?: { query?: URLSearchParams; body?: unknown; v3?: boolean },
   ): Promise<T> {
-    const url = `${BASE}${path}${init?.query ? `?${init.query.toString()}` : ""}`;
+    const url = `${init?.v3 ? BASE_V3 : BASE}${path}${init?.query ? `?${init.query.toString()}` : ""}`;
     for (let attempt = 0; ; attempt++) {
       await throttle();
       const res = await fetchImpl(url, {
@@ -231,10 +265,47 @@ export function createClickUpClient(opts: ClickUpClientOptions) {
         reverse: "true",
       });
       for (const id of q.spaceIds) query.append("space_ids[]", id);
+      for (const st of q.statuses ?? []) query.append("statuses[]", st);
+      for (const id of q.listIds ?? []) query.append("list_ids[]", id);
+      for (const id of q.assignees ?? []) query.append("assignees[]", id);
       if (q.dateUpdatedGtMs) query.set("date_updated_gt", String(q.dateUpdatedGtMs));
+      if (q.dueDateLtMs) query.set("due_date_lt", String(q.dueDateLtMs));
+      if (q.dueDateGtMs) query.set("due_date_gt", String(q.dueDateGtMs));
       return request("GET", `/team/${encodeURIComponent(teamId)}/task`, tasksPageSchema, { query });
     },
     getTaskComments: (taskId: string) => request("GET", `/task/${encodeURIComponent(taskId)}/comment`, commentsSchema),
+    // --- writes: only called after the owner approved (or for drafts in the drafts list) ---
+    createTask: (listId: string, task: NewTask) =>
+      request("POST", `/list/${encodeURIComponent(listId)}/task`, createdTaskSchema, { body: { ...task, notify_all: false } }),
+    updateTask: (taskId: string, change: TaskChange) =>
+      request("PUT", `/task/${encodeURIComponent(taskId)}`, createdTaskSchema, { body: change }),
+    deleteTask: (taskId: string) => request("DELETE", `/task/${encodeURIComponent(taskId)}`, null),
+    createComment: (taskId: string, text: string) =>
+      request("POST", `/task/${encodeURIComponent(taskId)}/comment`, commentCreatedSchema, {
+        body: { comment_text: text, notify_all: false },
+      }),
+    // --- chat (v3): DMs to workspace members, e.g. "Mission Control" ---
+    openDirectMessage: (teamId: string, userId: string) =>
+      request("POST", `/workspaces/${encodeURIComponent(teamId)}/chat/channels/direct_message`, chatChannelSchema, {
+        body: { user_ids: [userId] },
+        v3: true,
+      }),
+    sendChatMessage: (teamId: string, channelId: string, text: string) =>
+      request("POST", `/workspaces/${encodeURIComponent(teamId)}/chat/channels/${encodeURIComponent(channelId)}/messages`, z.object({ id: z.coerce.string() }).passthrough(), {
+        body: { type: "message", content: text, content_format: "text/plain" },
+        v3: true,
+      }),
+    getChatMessages: (teamId: string, channelId: string, limit = 10) =>
+      request("GET", `/workspaces/${encodeURIComponent(teamId)}/chat/channels/${encodeURIComponent(channelId)}/messages`, chatMessagesSchema, {
+        query: new URLSearchParams({ limit: String(limit) }),
+        v3: true,
+      }),
+    getList: (listId: string) =>
+      request("GET", `/list/${encodeURIComponent(listId)}`, z.object({ id: z.coerce.string(), name: z.string(), space: z.object({ id: z.coerce.string() }) })),
+    createList: (spaceId: string, name: string) =>
+      request("POST", `/space/${encodeURIComponent(spaceId)}/list`, z.object({ id: z.coerce.string(), name: z.string() }), {
+        body: { name },
+      }),
   };
 }
 

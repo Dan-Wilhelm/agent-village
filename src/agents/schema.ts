@@ -56,6 +56,8 @@ export const companySchema = z.object({
   name: z.string().min(1),
   environment: z.enum(["clickup"]),
   drafts_list: z.string().min(1).optional(),
+  /** ClickUp member id of "Mission Control" (DM target), if the company has it. */
+  mission_control_user_id: z.coerce.string().regex(/^\d+$/).optional(),
 });
 export type CompanyProfile = z.infer<typeof companySchema>;
 
