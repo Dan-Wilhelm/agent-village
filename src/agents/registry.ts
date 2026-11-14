@@ -87,3 +87,14 @@ export async function renameAgent(agentId: string, newName: string) {
   cache = null;
   return { id: agentId, name };
 }
+
+/** Marks an agent as introduced (after its first real conversation with the owner). */
+export async function markIntroduced(agentId: string) {
+  const registry = await loadRegistry({ fresh: true });
+  const agent = registry.agents.find((a) => a.id === agentId);
+  if (!agent || agent.introduced) return;
+  const file = await readVaultFile(agent.path);
+  if (!file) return;
+  await writeVaultFile(agent.path, updateFields(file.content, { introduced: true }), `${agent.role}: introduced`, file.sha);
+  cache = null;
+}

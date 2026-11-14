@@ -45,6 +45,11 @@ export async function getHqMeta(): Promise<HqMeta> {
 
 export interface HqTaskDetail {
   id: string;
+  name: string;
+  status: string;
+  statusColor: string | null;
+  dueAt: string | null;
+  url: string | null;
   description: string | null;
   comments: Array<{ id: string; author: string; text: string; at: string | null }>;
   commentsError?: string;
@@ -71,6 +76,11 @@ export async function getHqTaskDetail(taskId: string): Promise<HqTaskDetail | nu
     const { comments } = await client.getTaskComments(taskId);
     return {
       id: task.id,
+      name: task.name,
+      status: task.status.status,
+      statusColor: task.status.color ?? null,
+      dueAt: task.due_date ? new Date(task.due_date).toISOString() : null,
+      url: task.url ?? null,
       description,
       comments: comments.slice(0, 8).map((c) => ({
         id: c.id,
@@ -80,6 +90,16 @@ export async function getHqTaskDetail(taskId: string): Promise<HqTaskDetail | nu
       })),
     };
   } catch {
-    return { id: task.id, description, comments: [], commentsError: "Comments could not be loaded right now." };
+    return {
+      id: task.id,
+      name: task.name,
+      status: task.status.status,
+      statusColor: task.status.color ?? null,
+      dueAt: task.due_date ? new Date(task.due_date).toISOString() : null,
+      url: task.url ?? null,
+      description,
+      comments: [],
+      commentsError: "Comments could not be loaded right now.",
+    };
   }
 }
