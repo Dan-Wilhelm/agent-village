@@ -6,6 +6,8 @@ import dynamic from "next/dynamic";
 import { getRoster } from "@/app/actions/agents";
 import { Hud } from "@/ui/Hud";
 import { LoadingScreen } from "@/ui/LoadingScreen";
+import { registerServiceWorker } from "@/ui/push";
+import { startVisitPolling } from "@/ui/visits";
 import { useRoster } from "@/ui/roster/store";
 
 import { syncAgents } from "./director";
@@ -18,19 +20,24 @@ const Scene = dynamic(() => import("./Scene"), {
 
 export function VillageApp({ ownerName }: { ownerName: string }) {
   // The real agents come from the vault (settings only — no ClickUp content).
+  // Visits from triggers are picked up once the agents exist in the world.
   useEffect(() => {
     let cancelled = false;
+    let stopPolling: (() => void) | null = null;
+    void registerServiceWorker()?.catch(() => null);
     getRoster()
       .then((r) => {
         if (cancelled) return;
         useRoster.getState().set({ agents: r.agents, teams: r.teams, problems: r.problems });
         syncAgents(r.agents.map((a) => ({ id: a.id, name: a.name, role: a.role, look: a.look, home: a.home, priority: a.priority })));
+        stopPolling = startVisitPolling();
       })
       .catch(() => {
         /* the HUD shows an empty roster; the world still works */
       });
     return () => {
       cancelled = true;
+      stopPolling?.();
     };
   }, []);
 

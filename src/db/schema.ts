@@ -59,3 +59,34 @@ export const activityLog = pgTable(
 
 // Better Auth tables (login): user, session, account, verification, passkey, rateLimit
 export * from "./auth-schema";
+
+/**
+ * Agent visits created by triggers (schedule, before a calendar event). Holds
+ * NO content — only who, a generic reason, priority and timing. The content is
+ * built live when the owner opens the visit.
+ */
+export const visits = pgTable(
+  "visits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    agentId: text("agent_id").notNull(),
+    reason: text("reason").notNull(),
+    priority: text("priority", { enum: ["urgent", "high", "normal", "low"] }).notNull(),
+    /** Dedupe key, e.g. "acme-daily-briefing:schedule:2026-11-16T08:00". */
+    triggerKey: text("trigger_key").notNull(),
+    dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    status: text("status", { enum: ["pending", "delivered", "expired"] }).notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("visits_trigger_key").on(t.triggerKey), index("visits_status_due").on(t.status, t.dueAt)],
+);
+
+/** Web Push endpoints of the owner's devices (for generic notifications only). */
+export const pushSubscriptions = pgTable("push_subscriptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  endpoint: text("endpoint").notNull().unique(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});

@@ -171,13 +171,15 @@ In this document "I/me" is the owner, the one person who uses an Agent Village i
   - The agent profile shows the settings, the current playbook, its history (roll back to any version) and saved examples.
   - Everything is editable.
 
-### 4.4 Scheduling
+### 4.4 Scheduling and visits (built in Phase 3d)
 
-- Each scheduled agent has a small scheduler workflow. It computes the next due time, **sleeps until then** (durable `sleep`), starts the agent run, and repeats.
-- Changing the schedule in the app cancels and restarts the scheduler.
-- A daily Vercel Cron job acts as a watchdog and restarts any scheduler that stopped.
-- This avoids depending on the cron limits of the Vercel plan.
-- For now agents only act while I'm working: a global "office hours / I'm away" switch pauses all non-urgent visits. Running 24/7 later only means turning that switch off.
+- Triggers live in each agent's vault profile: `schedule` (days + Berlin wall-clock times), `before_event` (minutes before calendar events matching e.g. "client meetings"), `on_call`.
+- **Vercel Cron** calls `/api/cron/visits` every minute (`vercel.json`, Bearer `CRON_SECRET`, constant-time check). The pure logic in `src/agents/schedule.ts` (unit-tested, incl. summer/winter time) finds triggers that became due in the last 10 minutes, so missed runs are tolerated.
+- `before_event` reads the Apps Script calendar feed live. "Client meeting" = at least one attendee outside the most common (internal) attendee domain. Such visits are `urgent` and expire 15 minutes after the meeting starts; schedule visits expire after 3 hours.
+- Each due trigger becomes one row in `visits` (dedupe key `trigger_key`), holding **only** agent id, generic reason (the agent's role), priority and times — never ClickUp content. Delivered/expired rows are deleted after a day.
+- New visits send a **generic Web Push** ("Kai is on the way · Daily Briefing") to the owner's subscribed devices.
+- The village polls `/api/visits` every 30 s while visible; due visits send the agent walking to the office. Opening the visit marks it delivered and the agent builds its content live (the trigger line is shown as a note, not stored as the owner's words).
+- Still open: a global "office hours / I'm away" switch that pauses non-urgent visits.
 
 ### 4.5 The Dispatcher: one input, the right agent comes running
 
@@ -257,6 +259,7 @@ The owner is not stored in the database: the owner check uses `OWNER_EMAIL` (ver
 | `feedback` | My feedback on outputs, and the resulting playbook change |
 | `activity_log` | Append-only audit log of everything that happened |
 | `push_subscriptions` | Web Push endpoints of my devices |
+| `visits` | Trigger visits: agent id, generic reason, priority, due/expiry, status (no content) |
 
 ---
 
@@ -266,6 +269,7 @@ The owner is not stored in the database: the owner check uses `OWNER_EMAIL` (ver
 - Our database (Neon, **Frankfurt / eu-central-1**) keeps only: login (Better Auth), the **encrypted** ClickUp token, which spaces are allowed, and an activity log without task content. Server functions also run in Frankfurt (`vercel.json` → `regions: ["fra1"]`).
 - ClickUp HQ: owner-only server actions fetch open tasks of the allowed spaces (parallel pages, ≤ 90 requests/min); list and folder names come from the tasks themselves; task details and comments are fetched on demand. Task content is rendered as plain text, never as HTML.
 - The former sync (copy, webhook, 15-minute cron) was removed and its webhook deleted at ClickUp.
+- Phase 3d adds `visits` (pointers only, see 4.4) and `push_subscriptions` (device endpoints). The app is installable as a PWA (manifest + a push-only service worker that caches nothing).
 - **Agent knowledge** (playbooks, training, feedback, meeting notes) will live in the owner's Obsidian brain vault, in a separate private repo (`brain-agents`, appearing as `30-Areas/Agent Village/`), so it works across future environments, not only ClickUp. The app's token only reaches that repo, never the personal vault.
 
 ## 7. Security

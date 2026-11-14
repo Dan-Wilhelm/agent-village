@@ -29,7 +29,13 @@ export function ConversationDock() {
         state.closePanel();
         if (!visit) return;
         const agent = state.agents[visit.agentId];
-        open(visit.agentId, agent?.name ?? "Agent", visit.body ? { opening: visit.body } : undefined);
+        if (visit.visitId) {
+          // A trigger visit: the agent starts on its own; the visit is marked as seen.
+          void fetch("/api/visits", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: visit.visitId }) });
+          open(visit.agentId, agent?.name ?? "Agent", { opening: visit.body, triggerLabel: `⏰ ${visit.title}` });
+        } else {
+          open(visit.agentId, agent?.name ?? "Agent", visit.body ? { opening: visit.body } : undefined);
+        }
         setCollapsed(false);
       }),
     [open],
@@ -240,9 +246,11 @@ function RichText({ text, onTask }: { text: string; onTask: (id: string) => void
               key={i}
               type="button"
               onClick={() => onTask(task[1])}
-              className="mx-0.5 inline-flex rounded-md bg-wood/15 px-1.5 text-xs font-black text-wood-dark underline decoration-dotted"
+              title={`Open task ${task[1]} (loaded live from ClickUp)`}
+              aria-label={`Open task ${task[1]}`}
+              className="mx-0.5 inline-flex rounded-md bg-wood/15 px-1.5 text-xs font-black text-wood-dark hover:bg-wood/25"
             >
-              task {task[1]}
+              open ↗
             </button>
           );
         if (p.startsWith("**") && p.endsWith("**")) return <strong key={i}>{p.slice(2, -2)}</strong>;
