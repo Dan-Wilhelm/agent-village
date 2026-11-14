@@ -91,8 +91,8 @@ export const taskSchema = z.object({
   url: z.string().nullish(),
   parent: z.coerce.string().nullish(),
   archived: z.boolean().nullish(),
-  list: z.object({ id: z.coerce.string() }),
-  folder: z.object({ id: z.coerce.string(), hidden: z.boolean().nullish() }).nullish(),
+  list: z.object({ id: z.coerce.string(), name: z.string().nullish() }),
+  folder: z.object({ id: z.coerce.string(), name: z.string().nullish(), hidden: z.boolean().nullish() }).nullish(),
   space: z.object({ id: z.coerce.string() }),
   markdown_description: z.string().nullish(),
   text_content: z.string().nullish(),
@@ -112,11 +112,6 @@ export const commentsSchema = z.object({
   ),
 });
 
-export const webhookCreateSchema = z.object({
-  id: z.coerce.string(),
-  webhook: z.object({ id: z.coerce.string(), secret: z.string() }),
-});
-
 // ---------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------
@@ -134,6 +129,8 @@ export type TeamTasksQuery = {
   page?: number;
   includeClosed?: boolean;
   dateUpdatedGtMs?: number;
+  /** Skip markdown descriptions (smaller pages for overviews). */
+  withDescriptions?: boolean;
 };
 
 export function createClickUpClient(opts: ClickUpClientOptions) {
@@ -229,7 +226,7 @@ export function createClickUpClient(opts: ClickUpClientOptions) {
         page: String(q.page ?? 0),
         subtasks: "true",
         include_closed: String(q.includeClosed ?? false),
-        include_markdown_description: "true",
+        include_markdown_description: String(q.withDescriptions ?? false),
         order_by: "updated",
         reverse: "true",
       });
@@ -238,11 +235,6 @@ export function createClickUpClient(opts: ClickUpClientOptions) {
       return request("GET", `/team/${encodeURIComponent(teamId)}/task`, tasksPageSchema, { query });
     },
     getTaskComments: (taskId: string) => request("GET", `/task/${encodeURIComponent(taskId)}/comment`, commentsSchema),
-    createWebhook: (teamId: string, endpoint: string, events: string[]) =>
-      request("POST", `/team/${encodeURIComponent(teamId)}/webhook`, webhookCreateSchema, {
-        body: { endpoint, events },
-      }),
-    deleteWebhook: (webhookId: string) => request("DELETE", `/webhook/${encodeURIComponent(webhookId)}`, null),
   };
 }
 
