@@ -71,7 +71,7 @@ function startQueueFollower() {
 }
 
 /** An agent comes to the owner's desk (called by the owner, the dispatcher or a trigger). */
-export function summonAgent(agentId: string, visit: { title: string; body: string; priority?: Priority }) {
+export function summonAgent(agentId: string, visit: { title: string; body: string; priority?: Priority; visitId?: string }) {
   const agent = known.get(agentId);
   const store = useVillage.getState();
   if (!agent) return null;
@@ -84,6 +84,7 @@ export function summonAgent(agentId: string, visit: { title: string; body: strin
     body: visit.body,
     priority: visit.priority ?? agent.priority,
     createdAt: Date.now(),
+    visitId: visit.visitId,
   };
   store.enqueue(interaction);
   const index = useVillage.getState().queue.findIndex((q) => q.id === interaction.id);

@@ -22,6 +22,13 @@
       "when": 1794614780826,
       "tag": "0002_clickup_only",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794654222682,
+      "tag": "0003_visits_push",
+      "breakpoints": true
     }
   ]
 }

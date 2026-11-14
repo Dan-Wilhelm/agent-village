@@ -49,11 +49,16 @@ interface ConversationState {
   conversations: Record<string, Conversation>;
   order: string[];
   active: string | null;
-  open: (agentId: string, agentName: string, opts?: { opening?: string; mode?: "work" | "training"; visitTitle?: string }) => void;
+  open: (
+    agentId: string,
+    agentName: string,
+    opts?: { opening?: string; mode?: "work" | "training"; visitTitle?: string; triggerLabel?: string },
+  ) => void;
   focus: (agentId: string) => void;
   close: (agentId: string) => void;
   setMode: (agentId: string, mode: "work" | "training") => void;
-  send: (agentId: string, text: string) => Promise<void>;
+  /** `asNote`: text comes from a trigger, not from Dan (shown as a note, never stored as feedback). */
+  send: (agentId: string, text: string, opts?: { asNote?: string }) => Promise<void>;
   decide: (agentId: string, proposalId: string, decision: "approve" | "reject") => Promise<void>;
 }
 
@@ -91,7 +96,7 @@ export const useConversations = create<ConversationState>()((set, get) => {
         patch(agentId, (c) => ({ ...c, mode: opts.mode! }));
       }
       set({ active: agentId });
-      if (opts?.opening) void get().send(agentId, opts.opening);
+      if (opts?.opening) void get().send(agentId, opts.opening, opts.triggerLabel ? { asNote: opts.triggerLabel } : undefined);
     },
 
     focus: (agentId) => {
@@ -120,7 +125,7 @@ export const useConversations = create<ConversationState>()((set, get) => {
       setAgentActivity(agentId, mode === "training" ? "training" : "waiting");
     },
 
-    send: async (agentId, text) => {
+    send: async (agentId, text, opts) => {
       const c = get().conversations[agentId];
       if (!c || c.streaming || !text.trim()) return;
       const userMessage: ApiMessage = { role: "user", content: text };
@@ -128,8 +133,8 @@ export const useConversations = create<ConversationState>()((set, get) => {
         ...x,
         streaming: true,
         history: [...x.history, userMessage],
-        items: [...x.items, { kind: "user", text }],
-        ownerNotes: [...x.ownerNotes, text],
+        items: [...x.items, opts?.asNote ? { kind: "note", text: opts.asNote } : { kind: "user", text }],
+        ownerNotes: opts?.asNote ? x.ownerNotes : [...x.ownerNotes, text],
       }));
       setAgentActivity(agentId, "working");
 

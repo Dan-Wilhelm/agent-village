@@ -10,6 +10,7 @@ import { NotAllowed } from "@/ui/NotAllowed";
 import { loadClickUpChoices } from "./actions";
 import { ClickUpSettings } from "./ClickUpSettings";
 import { PasskeySettings } from "./PasskeySettings";
+import { PushSettings } from "./PushSettings";
 
 export default function SettingsPage() {
   return (
@@ -39,6 +40,7 @@ async function SettingsGate() {
           </Link>
         </header>
         <PasskeySettings />
+        <PushSettings />
         <ClickUpSettings
           account={
             account

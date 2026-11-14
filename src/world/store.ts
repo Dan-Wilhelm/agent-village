@@ -37,6 +37,8 @@ export interface Interaction {
   body: string;
   priority: Priority;
   createdAt: number;
+  /** Set when a trigger (schedule / calendar) created this visit on the server. */
+  visitId?: string;
 }
 
 /** Queue order: priority first, then arrival. */

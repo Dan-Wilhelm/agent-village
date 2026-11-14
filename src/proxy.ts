@@ -8,9 +8,18 @@ import { getSessionCookie } from "better-auth/cookies";
  *
  * Public on purpose (each authenticates its requests itself):
  * - /sign-in and /api/auth/* (the login itself),
- * - /api/dev/* (development only; returns 404 in production builds).
+ * - /api/dev/* (development only; returns 404 in production builds),
+ * - /api/cron/* (Vercel Cron; checks the CRON_SECRET bearer itself),
+ * - /sw.js and /manifest.webmanifest (fetched by the browser without cookies; no data).
  */
-const PUBLIC = [/^\/sign-in$/, /^\/api\/auth\//, /^\/api\/dev\//];
+const PUBLIC = [
+  /^\/sign-in$/,
+  /^\/api\/auth\//,
+  /^\/api\/dev\//,
+  /^\/api\/cron\//,
+  /^\/sw\.js$/,
+  /^\/manifest\.webmanifest$/,
+];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
