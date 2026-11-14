@@ -263,7 +263,7 @@ The owner is not stored in the database: the owner check uses `OWNER_EMAIL` (ver
 ### 6.1 ClickUp only: no copy of task data (owner decision, 2026-11-14)
 
 - Task data lives **only in ClickUp**. ClickUp HQ and agents read (and later write) it **live**; nothing is cached or stored.
-- Our database keeps only: login (Better Auth), the **encrypted** ClickUp token, which spaces are allowed, and an activity log without task content.
+- Our database (Neon, **Frankfurt / eu-central-1**) keeps only: login (Better Auth), the **encrypted** ClickUp token, which spaces are allowed, and an activity log without task content. Server functions also run in Frankfurt (`vercel.json` → `regions: ["fra1"]`).
 - ClickUp HQ: owner-only server actions fetch open tasks of the allowed spaces (parallel pages, ≤ 90 requests/min); list and folder names come from the tasks themselves; task details and comments are fetched on demand. Task content is rendered as plain text, never as HTML.
 - The former sync (copy, webhook, 15-minute cron) was removed and its webhook deleted at ClickUp.
 - **Agent knowledge** (playbooks, training, feedback, meeting notes) will live in the owner's Obsidian brain vault, in a separate private repo (`brain-agents`, appearing as `30-Areas/Agent Village/`), so it works across future environments, not only ClickUp. The app's token only reaches that repo, never the personal vault.
