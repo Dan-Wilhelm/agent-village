@@ -1,19 +1,15 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { count, eq } from "drizzle-orm";
 
-import { getDb, schema } from "@/db";
 import { checkOwner } from "@/lib/auth/owner";
-import { getClickUpAccount } from "@/integrations/clickup/sync";
+import { getClickUpAccount } from "@/integrations/clickup/account";
 import { LoadingScreen } from "@/ui/LoadingScreen";
 import { NotAllowed } from "@/ui/NotAllowed";
 
 import { loadClickUpChoices } from "./actions";
 import { ClickUpSettings } from "./ClickUpSettings";
 import { PasskeySettings } from "./PasskeySettings";
-
-export const maxDuration = 300; // full syncs run inside server actions on this page
 
 export default function SettingsPage() {
   return (
@@ -31,16 +27,7 @@ async function SettingsGate() {
   }
 
   const account = await getClickUpAccount();
-  const [choices, taskCount] = await Promise.all([
-    account ? loadClickUpChoices() : Promise.resolve({ teams: [], spaces: [] }),
-    account
-      ? getDb()
-          .select({ n: count() })
-          .from(schema.clickupTasks)
-          .where(eq(schema.clickupTasks.accountId, account.id))
-          .then((r) => r[0]?.n ?? 0)
-      : Promise.resolve(0),
-  ]);
+  const choices = account ? await loadClickUpChoices() : { teams: [], spaces: [] };
 
   return (
     <main className="min-h-screen flex-1 bg-gradient-to-b from-sky to-parchment p-4 sm:p-8">
@@ -60,10 +47,6 @@ async function SettingsGate() {
                   teamId: account.teamId,
                   teamName: account.teamName,
                   selectedSpaceIds: account.selectedSpaceIds,
-                  lastFullSyncAt: account.lastFullSyncAt?.toISOString() ?? null,
-                  lastSyncError: account.lastSyncError,
-                  liveUpdates: Boolean(account.webhookId),
-                  taskCount,
                 }
               : null
           }

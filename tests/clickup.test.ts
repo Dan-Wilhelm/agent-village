@@ -1,9 +1,7 @@
-import { createHmac } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 import { ClickUpError, createClickUpClient, taskSchema } from "@/integrations/clickup/client";
-import { isOpenTask, mapTask, maxUpdatedMs } from "@/integrations/clickup/mapping";
-import { safeEqual, verifyClickUpSignature, webhookEndpoint } from "@/integrations/clickup/webhook";
+import { hierarchyFromTasks, isOpenTask, toHqTask } from "@/integrations/clickup/mapping";
 
 const task = (over: Record<string, unknown> = {}) => ({
   id: "abc",
@@ -20,8 +18,8 @@ const task = (over: Record<string, unknown> = {}) => ({
   url: "https://app.clickup.com/t/abc",
   parent: null,
   archived: false,
-  list: { id: "L1" },
-  folder: { id: "F1", hidden: false },
+  list: { id: "L1", name: "Ad Briefs" },
+  folder: { id: "F1", name: "Production Pipeline", hidden: false },
   space: { id: "S1" },
   markdown_description: "Hello **world**",
   ...over,
@@ -70,6 +68,7 @@ describe("ClickUp client", () => {
     expect(url.searchParams.get("page")).toBe("2");
     expect(url.searchParams.get("include_closed")).toBe("true");
     expect(url.searchParams.get("date_updated_gt")).toBe("123");
+    expect(url.searchParams.get("include_markdown_description")).toBe("false");
   });
 
   it("throttles itself below 100 requests per minute", async () => {
@@ -85,54 +84,34 @@ describe("ClickUp client", () => {
   });
 });
 
-describe("mapping", () => {
-  it("maps a task to a row", () => {
-    const row = mapTask(taskSchema.parse(task()));
+describe("mapping (live, nothing stored)", () => {
+  it("maps a task for ClickUp HQ", () => {
+    const row = toHqTask(taskSchema.parse(task()));
     expect(row).toMatchObject({ id: "abc", listId: "L1", folderId: "F1", spaceId: "S1", status: "client review", priority: 2, tags: ["ads"] });
-    expect(row.dueAt?.toISOString()).toBe("2026-01-01T00:00:00.000Z");
+    expect(row.dueAt).toBe("2026-01-01T00:00:00.000Z");
     expect(row.assignees[0]).toMatchObject({ id: "7", username: "Dan" });
   });
 
   it("treats hidden folders as folderless lists", () => {
-    expect(mapTask(taskSchema.parse(task({ folder: { id: "F9", hidden: true } }))).folderId).toBeNull();
+    expect(toHqTask(taskSchema.parse(task({ folder: { id: "F9", hidden: true } }))).folderId).toBeNull();
   });
 
   it("detects closed and archived tasks", () => {
-    expect(isOpenTask(task() as never)).toBe(true);
-    expect(isOpenTask(task({ status: { status: "complete", type: "closed" } }) as never)).toBe(false);
-    expect(isOpenTask(task({ archived: true }) as never)).toBe(false);
-    expect(isOpenTask(task({ date_closed: 5 }) as never)).toBe(false);
+    expect(isOpenTask(taskSchema.parse(task()))).toBe(true);
+    expect(isOpenTask(taskSchema.parse(task({ status: { status: "complete", type: "closed" } })))).toBe(false);
+    expect(isOpenTask(taskSchema.parse(task({ archived: true })))).toBe(false);
+    expect(isOpenTask(taskSchema.parse(task({ date_closed: 5 })))).toBe(false);
   });
 
-  it("tracks the highest date_updated", () => {
-    expect(maxUpdatedMs([{ date_updated: 5 }, { date_updated: 9 }] as never, 7)).toBe(9);
-    expect(maxUpdatedMs([], 7)).toBe(7);
-  });
-});
-
-describe("webhook security", () => {
-  const body = JSON.stringify({ event: "taskUpdated", webhook_id: "w1", task_id: "abc" });
-  const sig = createHmac("sha256", "s3cret").update(body).digest("hex");
-
-  it("accepts a valid signature and rejects tampering, wrong secrets and junk", () => {
-    expect(verifyClickUpSignature(body, sig, "s3cret")).toBe(true);
-    expect(verifyClickUpSignature(body + " ", sig, "s3cret")).toBe(false);
-    expect(verifyClickUpSignature(body, sig, "other")).toBe(false);
-    expect(verifyClickUpSignature(body, null, "s3cret")).toBe(false);
-    expect(verifyClickUpSignature(body, "zz", "s3cret")).toBe(false);
-  });
-
-  it("compares bearer secrets safely", () => {
-    expect(safeEqual("Bearer a", "Bearer a")).toBe(true);
-    expect(safeEqual("Bearer a", "Bearer b")).toBe(false);
-    expect(safeEqual("short", "longer value")).toBe(false);
-  });
-
-  it("only registers webhooks for public https deployments", () => {
-    expect(webhookEndpoint({ VERCEL_PROJECT_PRODUCTION_URL: "agent-village-green.vercel.app" })).toBe(
-      "https://agent-village-green.vercel.app/api/webhooks/clickup",
-    );
-    expect(webhookEndpoint({ APP_BASE_URL: "http://localhost:3000" })).toBeNull();
-    expect(webhookEndpoint({})).toBeNull();
+  it("derives list and folder names from the tasks themselves", () => {
+    const h = hierarchyFromTasks([
+      taskSchema.parse(task()),
+      taskSchema.parse(task({ id: "x2", list: { id: "L2", name: "Landing Pages" }, folder: { id: "F0", hidden: true } })),
+    ]);
+    expect(h.lists).toEqual([
+      { id: "L1", name: "Ad Briefs", spaceId: "S1", folderId: "F1" },
+      { id: "L2", name: "Landing Pages", spaceId: "S1", folderId: null },
+    ]);
+    expect(h.folders).toEqual([{ id: "F1", name: "Production Pipeline" }]);
   });
 });

@@ -8,10 +8,9 @@ import { getSessionCookie } from "better-auth/cookies";
  *
  * Public on purpose (each authenticates its requests itself):
  * - /sign-in and /api/auth/* (the login itself),
- * - /api/webhooks/clickup (HMAC signature), /api/cron/* (CRON_SECRET bearer),
  * - /api/dev/* (development only; returns 404 in production builds).
  */
-const PUBLIC = [/^\/sign-in$/, /^\/api\/auth\//, /^\/api\/webhooks\/clickup$/, /^\/api\/cron\//, /^\/api\/dev\//];
+const PUBLIC = [/^\/sign-in$/, /^\/api\/auth\//, /^\/api\/dev\//];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;

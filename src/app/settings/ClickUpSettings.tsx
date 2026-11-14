@@ -7,7 +7,6 @@ import {
   disconnectClickUp,
   saveClickUpSpaces,
   selectClickUpWorkspace,
-  syncClickUpNow,
   type ActionState,
 } from "./actions";
 
@@ -16,10 +15,6 @@ interface AccountView {
   teamId: string | null;
   teamName: string | null;
   selectedSpaceIds: string[];
-  lastFullSyncAt: string | null;
-  lastSyncError: string | null;
-  liveUpdates: boolean;
-  taskCount: number;
 }
 
 function Message({ state }: { state: ActionState }) {
@@ -55,8 +50,8 @@ export function ClickUpSettings({
         ClickUp
       </h2>
       <p className="mt-1 text-sm text-ink/70">
-        Your agents read your ClickUp tasks from a private copy in your own database. The token is encrypted and
-        never sent to the browser.
+        Your tasks stay in ClickUp: the village reads them live and never stores a copy. Only the encrypted token
+        and the list of allowed spaces are saved; the token is never sent to the browser.
       </p>
 
       {account && (
@@ -65,18 +60,8 @@ export function ClickUpSettings({
           <dd>{account.userName}</dd>
           <dt className="font-bold">Workspace</dt>
           <dd>{account.teamName ?? "—"}</dd>
-          <dt className="font-bold">Open tasks synced</dt>
-          <dd>{account.taskCount}</dd>
-          <dt className="font-bold">Last full sync</dt>
-          <dd>{account.lastFullSyncAt ? new Date(account.lastFullSyncAt).toLocaleString() : "never"}</dd>
-          <dt className="font-bold">Live updates</dt>
-          <dd>{account.liveUpdates ? "on (webhook)" : "off — catch-up sync every 15 minutes"}</dd>
-          {account.lastSyncError && (
-            <>
-              <dt className="font-bold text-berry">Last error</dt>
-              <dd className="text-berry">{account.lastSyncError}</dd>
-            </>
-          )}
+          <dt className="font-bold">Allowed spaces</dt>
+          <dd>{account.selectedSpaceIds.length}</dd>
         </dl>
       )}
       {loadError && <p className="mt-3 text-sm font-bold text-berry">{loadError}</p>}
@@ -147,8 +132,8 @@ export function ClickUpSettings({
       {account?.teamId && (
         <form action={spacesAction} className="mt-6 flex flex-col gap-2">
           <fieldset>
-            <legend className="text-sm font-black">3. Spaces to sync</legend>
-            <p className="text-xs text-ink/70">Only these spaces are copied and visible to your agents.</p>
+            <legend className="text-sm font-black">3. Spaces your agents may see</legend>
+            <p className="text-xs text-ink/70">Only these spaces are read (live) by ClickUp HQ and your agents.</p>
             <div className="mt-2 flex flex-col gap-1.5">
               {spaces.map((s) => (
                 <label key={s.id} className="flex items-center gap-2 text-sm">
@@ -162,7 +147,7 @@ export function ClickUpSettings({
           </fieldset>
           <div>
             <button type="submit" disabled={savingSpaces} className="cozy-button bg-leaf px-4 py-2 text-sm disabled:opacity-60">
-              {savingSpaces ? "Saving & syncing… (can take a minute)" : "Save & sync"}
+              {savingSpaces ? "Saving…" : "Save"}
             </button>
           </div>
           <Message state={spacesState} />
@@ -174,17 +159,9 @@ export function ClickUpSettings({
         <div className="mt-8 flex flex-wrap gap-3 border-t-2 border-parchment pt-4">
           <button
             type="button"
-            disabled={busy || !account.teamId}
-            onClick={() => startTransition(async () => setMiscState(await syncClickUpNow()))}
-            className="cozy-button bg-parchment px-4 py-2 text-sm disabled:opacity-60"
-          >
-            {busy ? "Working…" : "Sync now"}
-          </button>
-          <button
-            type="button"
             disabled={busy}
             onClick={() => {
-              if (!window.confirm("Disconnect ClickUp and delete all cached ClickUp data?")) return;
+              if (!window.confirm("Disconnect ClickUp and delete the stored token?")) return;
               startTransition(async () => {
                 setMiscState(await disconnectClickUp());
                 setShowTokenForm(true);

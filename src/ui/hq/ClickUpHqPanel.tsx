@@ -3,12 +3,42 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 
-import { getHqOverview, getHqTaskDetail, type HqOverview, type HqTask, type HqTaskDetail } from "@/app/actions/hq";
+import { getHqMeta, getHqTaskDetail, type HqMeta, type HqTask, type HqTaskDetail } from "@/app/actions/hq";
 import { useUi } from "@/ui/uiStore";
 
 import { dueBucket, formatDue, type DueBucket } from "./buckets";
 
 type View = "focus" | "overdue" | "today" | "week" | "all";
+
+type SliceResult = {
+  tasks: HqTask[];
+  lists: Array<{ id: string; name: string; spaceId: string; folderId: string | null }>;
+  folders: Array<{ id: string; name: string }>;
+  done: boolean;
+};
+type LiveTasks = Omit<SliceResult, "done"> & { done: boolean; fetchedAt: string | null };
+
+const SLICE = 3; // pages per request (small slices arrive sooner)
+const PARALLEL_SLICES = 6; // requests in flight at once
+const MAX_PAGES = 40;
+const EMPTY_LIVE: LiveTasks = { tasks: [], lists: [], folders: [], done: true, fetchedAt: null };
+
+function mergeById<T extends { id: string }>(a: T[], b: T[]): T[] {
+  const map = new Map(a.map((x) => [x.id, x]));
+  for (const x of b) map.set(x.id, x);
+  return [...map.values()];
+}
+
+function mergeSlice(prev: LiveTasks, slice: SliceResult): LiveTasks {
+  return {
+    ...prev,
+    tasks: mergeById(prev.tasks, slice.tasks).sort(
+      (x, y) => (x.dueAt ?? "9999").localeCompare(y.dueAt ?? "9999") || x.name.localeCompare(y.name),
+    ),
+    lists: mergeById(prev.lists, slice.lists),
+    folders: mergeById(prev.folders, slice.folders),
+  };
+}
 
 const VIEWS: Array<{ id: View; label: string }> = [
   { id: "focus", label: "Focus" },
@@ -44,36 +74,76 @@ function inView(view: View, bucket: DueBucket) {
 export function ClickUpHqPanel() {
   const open = useUi((s) => s.hqOpen);
   const close = useUi((s) => s.closeHq);
-  const [data, setData] = useState<HqOverview | null>(null);
+  const [meta, setMeta] = useState<HqMeta | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, startLoading] = useTransition();
+  const [live, setLive] = useState<LiveTasks>(EMPTY_LIVE);
   const [view, setView] = useState<View>("focus");
   const [spaceFilter, setSpaceFilter] = useState<string | null>(null);
   const [mineOnly, setMineOnly] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<HqTask | null>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
+  const generation = useRef(0);
+  const loading = !live.done;
+
+  /** Loads everything live: metadata + task pages in parallel slices (nothing is stored). */
+  const load = async () => {
+    const gen = ++generation.current;
+    const current = () => gen === generation.current;
+    setError(null);
+    setLive({ ...EMPTY_LIVE, done: false });
+    getHqMeta()
+      .then((m) => current() && setMeta(m))
+      .catch(() => current() && setError("Could not load ClickUp HQ. Please try again."));
+
+    for (let start = 0; start < MAX_PAGES; start += SLICE * PARALLEL_SLICES) {
+      const starts = Array.from({ length: PARALLEL_SLICES }, (_, i) => start + i * SLICE).filter((s) => s < MAX_PAGES);
+      const results = await Promise.all(
+        starts.map((s) =>
+          fetch(`/api/hq/tasks?start=${s}&count=${SLICE}`, { cache: "no-store" })
+            .then(async (r) => (r.ok ? ((await r.json()) as SliceResult) : r.status === 409 ? { tasks: [], lists: [], folders: [], done: true } : Promise.reject(new Error(String(r.status)))))
+            .then((slice) => {
+              if (current()) setLive((prev) => mergeSlice(prev, slice));
+              return slice;
+            }),
+        ),
+      ).catch(() => null);
+      if (!current()) return;
+      if (!results) {
+        setError("ClickUp didn't answer in time. Please try Refresh.");
+        setLive((prev) => ({ ...prev, done: true }));
+        return;
+      }
+      if (results.some((r) => r.done)) break;
+    }
+    if (current()) setLive((prev) => ({ ...prev, done: true, fetchedAt: new Date().toISOString() }));
+  };
 
   useEffect(() => {
     if (!open) return;
     closeButton.current?.focus();
-    startLoading(async () => {
-      try {
-        setData(await getHqOverview());
-        setError(null);
-      } catch {
-        setError("Could not load your tasks. Please try again.");
-      }
-    });
+    // Start loading right after this render (not synchronously inside the effect).
+    const start = setTimeout(() => void load(), 0);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") close();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const loads = generation;
+    return () => {
+      clearTimeout(start);
+      window.removeEventListener("keydown", onKey);
+      loads.current++; // abandon a load in flight
+    };
   }, [open, close]);
 
-  const connected = data?.connected ? data : null;
-  const now = useMemo(() => new Date(), [data]); // eslint-disable-line react-hooks/exhaustive-deps
+  const connected = useMemo(
+    () =>
+      meta?.connected
+        ? { ...meta, tasks: live.tasks, lists: live.lists, folders: live.folders, fetchedAt: live.fetchedAt, truncated: false }
+        : null,
+    [meta, live],
+  );
+  const now = useMemo(() => new Date(), [live.fetchedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const enriched = useMemo(
     () => (connected?.tasks ?? []).map((t) => ({ task: t, bucket: dueBucket(t.dueAt, now) })),
@@ -142,8 +212,17 @@ export function ClickUpHqPanel() {
           <h2 id="hq-title" className="text-2xl font-black text-wood-dark">
             ClickUp HQ
           </h2>
-          {connected?.lastSyncAt && (
-            <span className="text-xs text-ink/60">synced {new Date(connected.lastSyncAt).toLocaleString()}</span>
+          {connected && (
+            <span className="text-xs text-ink/60">
+              {loading
+                ? `loading live from ClickUp… ${live.tasks.length ? `${live.tasks.length} tasks so far` : ""}`
+                : `live from ClickUp · ${live.fetchedAt ? new Date(live.fetchedAt).toLocaleTimeString() : ""}`}
+            </span>
+          )}
+          {connected?.ready && (
+            <button type="button" onClick={() => void load()} disabled={loading} className="text-xs font-bold text-wood underline disabled:opacity-50">
+              Refresh
+            </button>
           )}
           <span className="flex-1" />
           <Link href="/settings" className="text-sm font-bold text-wood underline">
@@ -154,10 +233,11 @@ export function ClickUpHqPanel() {
           </button>
         </header>
 
-        {loading && !data && <p className="p-6 text-ink/70">Fetching your tasks…</p>}
+        {!meta && !error && <p className="p-6 text-ink/70">Fetching your tasks live from ClickUp…</p>}
         {error && <p className="p-6 font-bold text-berry">{error}</p>}
+        {connected?.error && <p className="px-6 pt-4 font-bold text-berry">{connected.error}</p>}
 
-        {data && !data.connected && (
+        {meta && !meta.connected && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
             <p className="text-lg font-black">ClickUp isn&apos;t connected yet.</p>
             <p className="max-w-md text-sm text-ink/70">
@@ -172,7 +252,7 @@ export function ClickUpHqPanel() {
         {connected && !connected.ready && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
             <p className="text-lg font-black">Almost there!</p>
-            <p className="text-sm text-ink/70">Choose a workspace and the spaces to sync in Settings.</p>
+            <p className="text-sm text-ink/70">Choose a workspace and the spaces your agents may see in Settings.</p>
             <Link href="/settings" className="cozy-button bg-leaf px-4 py-2">
               Open settings
             </Link>
@@ -272,7 +352,7 @@ export function ClickUpHqPanel() {
                   </div>
                 ))}
                 {connected.truncated && (
-                  <p className="text-xs text-ink/50">Showing the first 3,000 open tasks.</p>
+                  <p className="text-xs text-ink/50">Showing the first 4,000 open tasks.</p>
                 )}
               </div>
             </div>

@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
 /**
- * Authenticated encryption for secrets at rest (integration tokens, webhook secrets).
+ * Authenticated encryption for secrets at rest (integration tokens).
  *
  * - AES-256-GCM with a random 96-bit IV per value.
  * - `context` is bound as additional authenticated data (AAD), e.g.
@@ -43,5 +43,4 @@ export function decryptSecret(payload: string, context: string, rawKey = process
 
 export const secretContext = {
   clickupToken: (accountId: string) => `clickup-token:${accountId}`,
-  clickupWebhook: (accountId: string) => `clickup-webhook:${accountId}`,
 };

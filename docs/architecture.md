@@ -57,7 +57,7 @@ In this document "I/me" is the owner, the one person who uses an Agent Village i
                                               ├───────────────────────────────────────────┤
                                               │ Integrations (adapter pattern)            │
                                               │  • ClickUp adapter + local cache          │
-                                              │  • ClickUp webhook receiver (HMAC check)  │
+                                              │  • live reads, no stored task data        │
                                               └──────────┬───────────────────┬────────────┘
                                                          │                   │
                                               ┌──────────▼───────┐  ┌────────▼─────────┐
@@ -217,9 +217,8 @@ What the ClickUp API research showed (sources in the research notes; checked 202
   - It is stored encrypted and only used server-side.
 - **Rate limit**
   - 100 requests/minute on Free, Unlimited and Business (more on Business Plus and Enterprise).
-  - So the app keeps a **local cache** of the spaces I select in the settings.
+  - The app reads live and stays under 90 requests/minute (see 6.1: no local copy).
   - The app connects **exactly one ClickUp account: the owner's own**, via the owner's personal token. No other accounts or users.
-  - The cache is updated by **webhooks** plus a periodic catch-up sync. Agents read from the cache.
 - **Not available**
   - **No API for calendar events**, including the Google Calendar events synced into ClickUp.
   - No webhook for Docs.
@@ -261,29 +260,13 @@ The owner is not stored in the database: the owner check uses `OWNER_EMAIL` (ver
 
 ---
 
-### 6.1 ClickUp sync (implemented in Phase 2)
+### 6.1 ClickUp only: no copy of task data (owner decision, 2026-11-14)
 
-- **Connect:** the owner enters a personal token in `/settings`.
-  - It is validated against ClickUp (`GET /user`, `GET /team`).
-  - It is stored with AES-256-GCM, bound to the account row.
-- **Choose scope:** the owner picks the ClickUp workspace and the spaces to sync. Only those spaces are copied.
-- **Full sync:**
-  - Hierarchy: spaces, folders and lists.
-  - All open tasks (subtasks included, 100 per page).
-  - Tasks not seen in a run are deleted. Closed and archived tasks are never kept.
-- **Live updates:**
-  - One team-wide ClickUp webhook for task events is registered automatically on the deployed app.
-  - Every webhook call is verified by its HMAC signature.
-  - The changed task is re-read from ClickUp; the payload is not trusted.
-- **Catch-up:**
-  - Vercel Cron runs `/api/cron/clickup-sync` every 15 minutes, protected by `CRON_SECRET`.
-  - It runs an incremental sync (`date_updated_gt` cursor).
-  - A full sync runs at least daily.
-- **Rate limits:** the client keeps itself under 90 requests per minute and honours `X-RateLimit-Reset` on HTTP 429.
-- **HQ overview:**
-  - Owner-only server actions read from the cache.
-  - Comments are fetched live per task.
-  - Task content is rendered as plain text, never as HTML.
+- Task data lives **only in ClickUp**. ClickUp HQ and agents read (and later write) it **live**; nothing is cached or stored.
+- Our database keeps only: login (Better Auth), the **encrypted** ClickUp token, which spaces are allowed, and an activity log without task content.
+- ClickUp HQ: owner-only server actions fetch open tasks of the allowed spaces (parallel pages, ≤ 90 requests/min); list and folder names come from the tasks themselves; task details and comments are fetched on demand. Task content is rendered as plain text, never as HTML.
+- The former sync (copy, webhook, 15-minute cron) was removed and its webhook deleted at ClickUp.
+- **Agent knowledge** (playbooks, training, feedback, meeting notes) will live in the owner's Obsidian brain vault, in a separate private repo (`brain-agents`, appearing as `30-Areas/Agent Village/`), so it works across future environments, not only ClickUp. The app's token only reaches that repo, never the personal vault.
 
 ## 7. Security
 
@@ -296,8 +279,7 @@ The owner is not stored in the database: the owner check uses `OWNER_EMAIL` (ver
    - Every server route and server action checks *both* that a valid session exists *and* that the user is the owner (`OWNER_EMAIL`, verified; optional `OWNER_USER_ID`).
    - Middleware alone is not trusted.
 3. **No public endpoints except signed ones**
-   - The ClickUp webhook is verified by HMAC signature, with replay protection by event id.
-   - Workflow and cron endpoints are protected by their own secrets.
+   - There are no public webhook or cron endpoints anymore; future ones must authenticate every request.
 4. **Secrets**
    - ClickUp tokens are encrypted with AES-256-GCM before they are stored.
    - The master key lives only in a Vercel *sensitive* environment variable.
@@ -335,14 +317,14 @@ The owner is not stored in the database: the owner check uses `OWNER_EMAIL` (ver
 
 ```
 agent-village/
-  app/                 Next.js routes (world, panels, API, webhooks)
+  app/                 Next.js routes (world, panels, API, auth)
   src/world/           3D scene, voxel builder, characters, controls
   src/ui/              2D overlay panels, HUD, wizard
   src/agents/          engine, tools, prompts, agent types (intake checklists)
   src/workflows/       durable agent runs, scheduler, approvals
   src/integrations/    adapter interface + clickup/
   src/db/              Drizzle schema + migrations
-  src/security/        owner check, encryption, webhook signatures
+  src/lib/             owner check, auth, encryption, activity log
   docs/                architecture, setup, security notes
   .env.example         every variable, no real values
   README.md            self-hosting guide

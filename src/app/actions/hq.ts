@@ -1,85 +1,46 @@
 "use server";
 
-import { and, asc, eq, sql } from "drizzle-orm";
-
-import { getDb, schema } from "@/db";
 import { requireOwnerAction } from "@/lib/auth/require-owner";
-import { clientFor, getClickUpAccount } from "@/integrations/clickup/sync";
+import { ClickUpError } from "@/integrations/clickup/client";
+import { clientFor, getClickUpAccount } from "@/integrations/clickup/account";
+import type { HqTask } from "@/integrations/clickup/mapping";
 
-export interface HqTask {
-  id: string;
-  name: string;
-  status: string;
-  statusColor: string | null;
-  priority: number | null;
-  dueAt: string | null;
-  listId: string;
-  spaceId: string;
-  folderId: string | null;
-  parentId: string | null;
-  assignees: Array<{ id: string; username: string; initials?: string; color?: string }>;
-  tags: string[];
-  url: string | null;
-}
+export type { HqTask };
 
-export type HqOverview =
+export type HqMeta =
   | { connected: false }
   | {
       connected: true;
       ready: boolean;
       me: string;
-      lastSyncAt: string | null;
       spaces: Array<{ id: string; name: string; color: string | null }>;
-      lists: Array<{ id: string; name: string; spaceId: string; folderId: string | null }>;
-      folders: Array<{ id: string; name: string }>;
-      tasks: HqTask[];
-      truncated: boolean;
+      error?: string;
     };
 
-const TASK_LIMIT = 3000;
-
-export async function getHqOverview(): Promise<HqOverview> {
+/** Connection + allowed spaces (live from ClickUp). Tasks are loaded in parallel slices via /api/hq/tasks. */
+export async function getHqMeta(): Promise<HqMeta> {
   await requireOwnerAction();
   const account = await getClickUpAccount();
   if (!account) return { connected: false };
-  const db = getDb();
-  const [spaces, lists, folders, tasks] = await Promise.all([
-    db.select().from(schema.clickupSpaces).where(eq(schema.clickupSpaces.accountId, account.id)).orderBy(asc(schema.clickupSpaces.name)),
-    db.select().from(schema.clickupLists).where(eq(schema.clickupLists.accountId, account.id)).orderBy(asc(schema.clickupLists.name)),
-    db.select().from(schema.clickupFolders).where(eq(schema.clickupFolders.accountId, account.id)),
-    db
-      .select({
-        id: schema.clickupTasks.id,
-        name: schema.clickupTasks.name,
-        status: schema.clickupTasks.status,
-        statusColor: schema.clickupTasks.statusColor,
-        priority: schema.clickupTasks.priority,
-        dueAt: schema.clickupTasks.dueAt,
-        listId: schema.clickupTasks.listId,
-        spaceId: schema.clickupTasks.spaceId,
-        folderId: schema.clickupTasks.folderId,
-        parentId: schema.clickupTasks.parentId,
-        assignees: schema.clickupTasks.assignees,
-        tags: schema.clickupTasks.tags,
-        url: schema.clickupTasks.url,
-      })
-      .from(schema.clickupTasks)
-      .where(eq(schema.clickupTasks.accountId, account.id))
-      .orderBy(sql`${schema.clickupTasks.dueAt} asc nulls last`, asc(schema.clickupTasks.name))
-      .limit(TASK_LIMIT + 1),
-  ]);
-
-  return {
-    connected: true,
-    ready: Boolean(account.teamId && account.selectedSpaceIds.length),
-    me: account.externalUserId,
-    lastSyncAt: account.lastFullSyncAt?.toISOString() ?? null,
-    spaces: spaces.map((s) => ({ id: s.id, name: s.name, color: s.color })),
-    lists: lists.map((l) => ({ id: l.id, name: l.name, spaceId: l.spaceId, folderId: l.folderId })),
-    folders: folders.map((f) => ({ id: f.id, name: f.name })),
-    tasks: tasks.slice(0, TASK_LIMIT).map((t) => ({ ...t, dueAt: t.dueAt?.toISOString() ?? null })),
-    truncated: tasks.length > TASK_LIMIT,
-  };
+  const ready = Boolean(account.teamId && account.selectedSpaceIds.length);
+  if (!ready || !account.teamId) return { connected: true, ready: false, me: account.externalUserId, spaces: [] };
+  try {
+    const { spaces } = await clientFor(account).getSpaces(account.teamId);
+    return {
+      connected: true,
+      ready: true,
+      me: account.externalUserId,
+      spaces: spaces
+        .filter((s) => account.selectedSpaceIds.includes(s.id))
+        .map((s) => ({ id: s.id, name: s.name, color: s.color ?? null })),
+    };
+  } catch (err) {
+    const error =
+      err instanceof ClickUpError && err.status === 401
+        ? "ClickUp rejected the token. Please reconnect in Settings."
+        : "Could not reach ClickUp right now.";
+    return { connected: true, ready: true, me: account.externalUserId, spaces: [], error };
+  }
 }
 
 export interface HqTaskDetail {
@@ -89,24 +50,28 @@ export interface HqTaskDetail {
   commentsError?: string;
 }
 
-/** Description from the cache; latest comments live from ClickUp (one request). */
+/** Description and latest comments, live from ClickUp; only for tasks in the allowed spaces. */
 export async function getHqTaskDetail(taskId: string): Promise<HqTaskDetail | null> {
   await requireOwnerAction();
   if (typeof taskId !== "string" || !/^[A-Za-z0-9_-]{1,40}$/.test(taskId)) return null;
   const account = await getClickUpAccount();
   if (!account) return null;
-  const [row] = await getDb()
-    .select({ id: schema.clickupTasks.id, description: schema.clickupTasks.descriptionMd })
-    .from(schema.clickupTasks)
-    .where(and(eq(schema.clickupTasks.id, taskId), eq(schema.clickupTasks.accountId, account.id)))
-    .limit(1);
-  if (!row) return null; // only tasks from the synced spaces
+  const client = clientFor(account);
 
+  let task;
   try {
-    const { comments } = await clientFor(account).getTaskComments(taskId);
+    task = await client.getTask(taskId);
+  } catch {
+    return null;
+  }
+  if (!account.selectedSpaceIds.includes(task.space.id)) return null; // only allowed spaces
+
+  const description = (task.markdown_description ?? task.text_content ?? null)?.slice(0, 20_000) ?? null;
+  try {
+    const { comments } = await client.getTaskComments(taskId);
     return {
-      id: row.id,
-      description: row.description,
+      id: task.id,
+      description,
       comments: comments.slice(0, 8).map((c) => ({
         id: c.id,
         author: c.user?.username ?? "Someone",
@@ -115,6 +80,6 @@ export async function getHqTaskDetail(taskId: string): Promise<HqTaskDetail | nu
       })),
     };
   } catch {
-    return { id: row.id, description: row.description, comments: [], commentsError: "Comments could not be loaded right now." };
+    return { id: task.id, description, comments: [], commentsError: "Comments could not be loaded right now." };
   }
 }
