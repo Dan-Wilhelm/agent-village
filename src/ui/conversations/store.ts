@@ -1,0 +1,238 @@
+"use client";
+
+import type Anthropic from "@anthropic-ai/sdk";
+import { create } from "zustand";
+
+import { markAgentIntroduced } from "@/app/actions/agents";
+import { useRoster } from "@/ui/roster/store";
+import { releaseAgent, setAgentActivity, summonAgent } from "@/world/director";
+import { sceneBridge } from "@/world/controls";
+
+/**
+ * Open conversations live ONLY in this browser tab (nothing is stored on the
+ * server): the API history is sent with every turn.
+ */
+
+type ApiMessage = Anthropic.Beta.BetaMessageParam;
+
+export interface ProposalView {
+  id: string;
+  kind: "comment" | "task_change" | "draft_task" | "mission_control_message" | "playbook_rule";
+  agentId: string;
+  args: Record<string, unknown>;
+  summary: string;
+  state: "pending" | "working" | "approved" | "rejected" | "failed";
+  result?: string;
+}
+
+export type DisplayItem =
+  | { kind: "user"; text: string }
+  | { kind: "agent"; text: string }
+  | { kind: "tool"; name: string; status: "running" | "done" | "error" }
+  | { kind: "proposal"; id: string }
+  | { kind: "note"; text: string }
+  | { kind: "error"; text: string };
+
+export interface Conversation {
+  agentId: string;
+  agentName: string;
+  mode: "work" | "training";
+  history: ApiMessage[];
+  items: DisplayItem[];
+  proposals: Record<string, ProposalView>;
+  streaming: boolean;
+  /** What the owner wrote — the only text "decide later" may store. */
+  ownerNotes: string[];
+}
+
+interface ConversationState {
+  conversations: Record<string, Conversation>;
+  order: string[];
+  active: string | null;
+  open: (agentId: string, agentName: string, opts?: { opening?: string; mode?: "work" | "training"; visitTitle?: string }) => void;
+  focus: (agentId: string) => void;
+  close: (agentId: string) => void;
+  setMode: (agentId: string, mode: "work" | "training") => void;
+  send: (agentId: string, text: string) => Promise<void>;
+  decide: (agentId: string, proposalId: string, decision: "approve" | "reject") => Promise<void>;
+}
+
+const TOOL_LABEL: Record<string, string> = {
+  search_tasks: "searching ClickUp",
+  list_structure: "reading the list structure",
+  get_task: "reading a task",
+  get_calendar: "checking your calendar",
+  read_mission_control_replies: "reading Mission Control",
+};
+export const toolLabel = (name: string) => TOOL_LABEL[name] ?? "preparing a proposal";
+
+export const useConversations = create<ConversationState>()((set, get) => {
+  const patch = (agentId: string, fn: (c: Conversation) => Conversation) =>
+    set((s) => (s.conversations[agentId] ? { conversations: { ...s.conversations, [agentId]: fn(s.conversations[agentId]) } } : s));
+
+  return {
+    conversations: {},
+    order: [],
+    active: null,
+
+    open: (agentId, agentName, opts) => {
+      sceneBridge.unlock();
+      const exists = get().conversations[agentId];
+      if (!exists) {
+        set((s) => ({
+          conversations: {
+            ...s.conversations,
+            [agentId]: { agentId, agentName, mode: opts?.mode ?? "work", history: [], items: [], proposals: {}, streaming: false, ownerNotes: [] },
+          },
+          order: [...s.order, agentId],
+        }));
+        summonAgent(agentId, { title: opts?.visitTitle ?? "You called", body: opts?.opening ?? "", priority: undefined });
+      } else if (opts?.mode) {
+        patch(agentId, (c) => ({ ...c, mode: opts.mode! }));
+      }
+      set({ active: agentId });
+      if (opts?.opening) void get().send(agentId, opts.opening);
+    },
+
+    focus: (agentId) => {
+      sceneBridge.unlock();
+      set({ active: agentId });
+    },
+
+    close: (agentId) => {
+      const closing = get().conversations[agentId];
+      const rosterEntry = useRoster.getState().agents.find((a) => a.id === agentId);
+      if (closing && closing.ownerNotes.length > 0 && rosterEntry && !rosterEntry.introduced) {
+        void markAgentIntroduced(agentId);
+        useRoster.setState((r) => ({ agents: r.agents.map((a) => (a.id === agentId ? { ...a, introduced: true } : a)) }));
+      }
+      set((s) => {
+        const { [agentId]: _gone, ...rest } = s.conversations;
+        void _gone;
+        const order = s.order.filter((id) => id !== agentId);
+        return { conversations: rest, order, active: s.active === agentId ? (order.at(-1) ?? null) : s.active };
+      });
+      releaseAgent(agentId);
+    },
+
+    setMode: (agentId, mode) => {
+      patch(agentId, (c) => ({ ...c, mode, items: [...c.items, { kind: "note", text: mode === "training" ? "Training mode on — teach me." : "Back to work mode." }] }));
+      setAgentActivity(agentId, mode === "training" ? "training" : "waiting");
+    },
+
+    send: async (agentId, text) => {
+      const c = get().conversations[agentId];
+      if (!c || c.streaming || !text.trim()) return;
+      const userMessage: ApiMessage = { role: "user", content: text };
+      patch(agentId, (x) => ({
+        ...x,
+        streaming: true,
+        history: [...x.history, userMessage],
+        items: [...x.items, { kind: "user", text }],
+        ownerNotes: [...x.ownerNotes, text],
+      }));
+      setAgentActivity(agentId, "working");
+
+      let agentText = "";
+      const appendText = (delta: string) => {
+        agentText += delta;
+        patch(agentId, (x) => {
+          const items = [...x.items];
+          const last = items.at(-1);
+          if (last?.kind === "agent") items[items.length - 1] = { kind: "agent", text: last.text + delta };
+          else items.push({ kind: "agent", text: delta });
+          return { ...x, items };
+        });
+      };
+
+      try {
+        const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/turn`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: get().conversations[agentId]?.mode ?? "work", messages: get().conversations[agentId]?.history ?? [] }),
+        });
+        if (!res.ok || !res.body) throw new Error(res.status === 401 ? "Please sign in again." : "The agent is not reachable.");
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buffer.indexOf("\n\n")) >= 0) {
+            const chunk = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+            if (!chunk.startsWith("data: ")) continue;
+            const event = JSON.parse(chunk.slice(6));
+            if (event.type === "text") appendText(event.text);
+            else if (event.type === "tool") {
+              patch(agentId, (x) => {
+                // A finished tool replaces its own "running" line instead of adding a new one.
+                if (event.status !== "running") {
+                  const idx = x.items.findLastIndex((it) => it.kind === "tool" && it.name === event.name && it.status === "running");
+                  if (idx >= 0) {
+                    const items = [...x.items];
+                    items[idx] = { kind: "tool", name: event.name, status: event.status };
+                    return { ...x, items };
+                  }
+                }
+                return { ...x, items: [...x.items, { kind: "tool", name: event.name, status: event.status }] };
+              });
+              if (event.status === "running") setAgentActivity(agentId, "working", toolLabel(event.name));
+            } else if (event.type === "proposal") {
+              const p = event.proposal as Omit<ProposalView, "state">;
+              patch(agentId, (x) => ({
+                ...x,
+                proposals: { ...x.proposals, [p.id]: { ...p, state: "pending" } },
+                items: [...x.items, { kind: "proposal", id: p.id }],
+              }));
+            } else if (event.type === "done") {
+              patch(agentId, (x) => ({ ...x, history: [...x.history, ...(event.messages as ApiMessage[])] }));
+            } else if (event.type === "error") {
+              patch(agentId, (x) => ({ ...x, items: [...x.items, { kind: "error", text: event.message }] }));
+            }
+          }
+        }
+      } catch (err) {
+        patch(agentId, (x) => ({ ...x, items: [...x.items, { kind: "error", text: err instanceof Error ? err.message : "Something went wrong." }] }));
+      } finally {
+        patch(agentId, (x) => ({ ...x, streaming: false }));
+        const mode = get().conversations[agentId]?.mode;
+        setAgentActivity(agentId, mode === "training" ? "training" : "waiting", agentText ? "💬" : undefined);
+      }
+    },
+
+    decide: async (agentId, proposalId, decision) => {
+      const c = get().conversations[agentId];
+      const p = c?.proposals[proposalId];
+      if (!c || !p || p.state !== "pending") return;
+      const setP = (patchP: Partial<ProposalView>) =>
+        patch(agentId, (x) => ({ ...x, proposals: { ...x.proposals, [proposalId]: { ...x.proposals[proposalId], ...patchP } } }));
+      setP({ state: "working" });
+      try {
+        const res = await fetch("/api/agents/proposals", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ agentId, kind: p.kind, args: p.args, decision }),
+        });
+        const json = (await res.json()) as { ok: boolean; message: string };
+        if (!res.ok || !json.ok) throw new Error(json.message || "Failed.");
+        setP({ state: decision === "approve" ? "approved" : "rejected", result: json.message });
+        // Tell the agent what happened (appended to the conversation, not stored anywhere).
+        const note = `[Dan ${decision === "approve" ? "approved" : "rejected"} proposal ${proposalId} (${p.summary}). Result: ${json.message}]`;
+        patch(agentId, (x) => ({ ...x, history: appendUserNote(x.history, note) }));
+      } catch (err) {
+        setP({ state: "failed", result: err instanceof Error ? err.message : "Failed." });
+      }
+    },
+  };
+});
+
+/**
+ * Appends the decision as a NEW user message (append-only: already-sent turns are
+ * never edited, which keeps the model's earlier reasoning valid).
+ */
+function appendUserNote(history: ApiMessage[], note: string): ApiMessage[] {
+  return [...history, { role: "user", content: note }];
+}

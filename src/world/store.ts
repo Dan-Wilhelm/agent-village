@@ -24,13 +24,24 @@ export interface AgentView {
   bubble?: string;
 }
 
-/** Something an agent brings to the owner. Phase 3 adds approvals, previews and feedback. */
+export type Priority = "urgent" | "high" | "normal" | "low";
+export const PRIORITY_RANK: Record<Priority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+
+/** A visit: an agent wants (or was asked) to talk to the owner. Holds no ClickUp content. */
 export interface Interaction {
   id: string;
   agentId: string;
+  /** Short reason shown in the queue, e.g. "Daily plan" or "You called". */
   title: string;
+  /** Opening line for the conversation (from the owner or the trigger). */
   body: string;
+  priority: Priority;
   createdAt: number;
+}
+
+/** Queue order: priority first, then arrival. */
+export function sortQueue(queue: Interaction[]): Interaction[] {
+  return [...queue].sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || a.createdAt - b.createdAt);
 }
 
 export type PlayerMode = "desk" | "walk";
@@ -65,7 +76,7 @@ export const useVillage = create<VillageState>()((set, get) => ({
     set((s) => (s.agents[id] ? { agents: { ...s.agents, [id]: { ...s.agents[id], ...patch } } } : s)),
   enqueue: (interaction) =>
     set((s) =>
-      s.queue.some((q) => q.agentId === interaction.agentId) ? s : { queue: [...s.queue, interaction] },
+      s.queue.some((q) => q.agentId === interaction.agentId) ? s : { queue: sortQueue([...s.queue, interaction]) },
     ),
   resolve: (interactionId) => {
     const found = get().queue.find((q) => q.id === interactionId);

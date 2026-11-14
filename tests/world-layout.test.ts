@@ -59,7 +59,8 @@ describe("walking graph", () => {
       expect(crossesWall(s.inside ? officeIn : officeOut, s), `slot ${i}`).toBeNull();
       // re-targeted while still walking in via office-out
       expect(crossesWall(officeOut, s), `slot ${i} via office-out`).toBeNull();
-      for (let j = 0; j < i; j++) {
+      for (let j = 0; j < QUEUE_SLOTS.length; j++) {
+        if (j === i) continue;
         let at: { x: number; z: number } = s;
         for (const p of queueMovePath(i, j)) {
           expect(crossesWall(at, p), `slot ${i}->${j}`).toBeNull();
@@ -145,7 +146,8 @@ describe("village props", () => {
     const segments: Array<[{ x: number; z: number }, { x: number; z: number }]> = [];
     QUEUE_SLOTS.forEach((s, i) => {
       segments.push([s.inside ? officeIn : officeOut, s], [officeOut, s]);
-      for (let j = 0; j < i; j++) {
+      for (let j = 0; j < QUEUE_SLOTS.length; j++) {
+        if (j === i) continue;
         let at: { x: number; z: number } = s;
         for (const p of queueMovePath(i, j)) {
           segments.push([at, p]);

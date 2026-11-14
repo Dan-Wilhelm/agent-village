@@ -208,6 +208,8 @@ export const OFFICE_DOOR = { x: 0, z: 17 };
 export function queueMovePath(fromSlot: number, toSlot: number): Array<{ x: number; z: number }> {
   const from = QUEUE_SLOTS[Math.min(fromSlot, QUEUE_SLOTS.length - 1)];
   const to = QUEUE_SLOTS[Math.min(toSlot, QUEUE_SLOTS.length - 1)];
-  if (!from.inside && to.inside) return [OFFICE_DOOR, { x: to.x, z: to.z }];
+  // Crossing between inside and outside always goes through the door (both directions:
+  // a higher-priority visit can push someone back out).
+  if (from.inside !== to.inside) return [OFFICE_DOOR, { x: to.x, z: to.z }];
   return [{ x: to.x, z: to.z }];
 }

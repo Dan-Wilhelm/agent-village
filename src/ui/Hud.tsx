@@ -3,7 +3,11 @@
 import { useEffect } from "react";
 import Link from "next/link";
 
+import { ConversationDock } from "@/ui/conversations/ConversationDock";
+import { useConversations } from "@/ui/conversations/store";
+import { Dispatcher } from "@/ui/dispatch/Dispatcher";
 import { ClickUpHqPanel } from "@/ui/hq/ClickUpHqPanel";
+import { RosterPanel } from "@/ui/roster/RosterPanel";
 import { SignOutButton } from "@/ui/SignOutButton";
 import { useUi } from "@/ui/uiStore";
 import { sceneBridge } from "@/world/controls";
@@ -19,6 +23,9 @@ export function Hud({ ownerName }: { ownerName: string }) {
   const nearby = nearbyAgentId ? agents[nearbyAgentId] : undefined;
   const openHq = useUi((s) => s.openHq);
   const hqOpen = useUi((s) => s.hqOpen);
+  const openRoster = useUi((s) => s.openRoster);
+  const conversations = useConversations((s) => s.conversations);
+  const focusConversation = useConversations((s) => s.focus);
 
   // Walking into ClickUp HQ opens the task overview.
   useEffect(() => {
@@ -54,6 +61,16 @@ export function Hud({ ownerName }: { ownerName: string }) {
           </button>
           <button
             type="button"
+            onClick={() => {
+              sceneBridge.unlock();
+              openRoster();
+            }}
+            className="cozy-button bg-leaf px-3 py-1 text-xs"
+          >
+            Agents
+          </button>
+          <button
+            type="button"
             onClick={() => sceneBridge.toDesk()}
             className="cozy-button bg-parchment px-3 py-1 text-xs"
           >
@@ -75,14 +92,14 @@ export function Hud({ ownerName }: { ownerName: string }) {
           {queue.length === 0 ? (
             <p className="mt-1 text-xs text-ink/60">Nobody yet — enjoy the quiet. 🌿</p>
           ) : (
-            <ul className="mt-2 flex flex-col gap-1.5">
+            <ul className="mt-2 flex max-h-28 flex-col gap-1.5 overflow-y-auto">
               {queue.map((q) => {
                 const a = agents[q.agentId];
                 return (
                   <li key={q.id}>
                     <button
                       type="button"
-                      onClick={() => openInteraction(q.id)}
+                      onClick={() => (conversations[q.agentId] ? focusConversation(q.agentId) : openInteraction(q.id))}
                       className="flex w-full items-center gap-2 rounded-xl px-2 py-1 text-left hover:bg-parchment focus-visible:outline-2 focus-visible:outline-sky"
                     >
                       <span
@@ -97,7 +114,11 @@ export function Hud({ ownerName }: { ownerName: string }) {
                             <span className="ml-1 text-xs font-semibold text-ink/50">· on the way</span>
                           )}
                         </span>
-                        <span className="block truncate text-xs text-ink/70">{q.title}</span>
+                        <span className="block truncate text-xs text-ink/70">
+                          {q.priority === "urgent" && <span className="mr-1 font-black text-berry">⚡</span>}
+                          {q.priority === "high" && <span className="mr-1 font-black text-wood">▲</span>}
+                          {q.title}
+                        </span>
                       </span>
                     </button>
                   </li>
@@ -114,8 +135,8 @@ export function Hud({ ownerName }: { ownerName: string }) {
       )}
 
       {/* talk prompt */}
-      {nearby && !panelOpen && (
-        <div className="cozy-card absolute bottom-10 left-1/2 -translate-x-1/2 px-4 py-2 text-sm font-extrabold">
+      {nearby && !panelOpen && !conversations[nearby.id] && (
+        <div className="cozy-card absolute bottom-32 left-1/2 -translate-x-1/2 px-4 py-2 text-sm font-extrabold">
           {mode === "walk" ? (
             <>
               Press <kbd className="rounded border border-wood px-1.5">E</kbd> to talk to {nearby.name}
@@ -126,13 +147,12 @@ export function Hud({ ownerName }: { ownerName: string }) {
         </div>
       )}
 
+      <Dispatcher />
+      <ConversationDock />
+
       <div className="pointer-events-auto">
         <ClickUpHqPanel />
-      </div>
-
-      {/* phase badge */}
-      <div className="absolute bottom-4 right-4 rounded-full bg-ink/70 px-3 py-1 text-xs font-bold text-cream">
-        Demo agents · real agents arrive in Phase 3–4
+        <RosterPanel />
       </div>
     </div>
   );
