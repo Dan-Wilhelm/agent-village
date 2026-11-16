@@ -126,3 +126,15 @@ export function dueEventVisits(
   }
   return out;
 }
+
+/** Human description of a trigger, e.g. "weekdays at 08:00" or "10 min before client meetings". */
+export function describeTrigger(t: { type: string; days?: string[]; time?: string | string[]; minutes?: number; match?: string }) {
+  if (t.type === "schedule") {
+    const days = t.days ?? [];
+    const label =
+      days.join(",") === "mon,tue,wed,thu,fri" ? "weekdays" : days.length === 7 ? "daily" : days.map((d) => d[0].toUpperCase() + d.slice(1)).join(", ");
+    return `${label} at ${[t.time].flat().join(", ")}`;
+  }
+  if (t.type === "before_event") return `${t.minutes} min before ${t.match}`;
+  return "when called";
+}

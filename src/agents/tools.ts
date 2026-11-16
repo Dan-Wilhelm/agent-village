@@ -4,8 +4,11 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 
 import { clientFor, type ClickUpAccount } from "@/integrations/clickup/account";
+import type { ClickUpCustomField } from "@/integrations/clickup/client";
+import { apiValueFor, keyFields, matchesFieldFilter } from "@/integrations/clickup/fields";
 import { isOpenTask } from "@/integrations/clickup/mapping";
 import { fetchUpcomingEvents } from "@/integrations/calendar/feed";
+import { listVaultFiles, readVaultFile, writeVaultFile } from "@/integrations/vault/github";
 
 import { assertDiscreet } from "./discretion";
 import type { AgentEntry } from "./registry";
@@ -18,7 +21,7 @@ import type { AgentProfile } from "./schema";
  * The only exception is draft_task, which writes into the private drafts list.
  */
 
-export type ProposalKind = "comment" | "task_change" | "draft_task" | "mission_control_message" | "playbook_rule";
+export type ProposalKind = "comment" | "task_change" | "draft_task" | "mission_control_message" | "playbook_rule" | "meeting_notes";
 
 export interface Proposal {
   id: string;
@@ -35,6 +38,10 @@ export interface ToolContext {
   account: ClickUpAccount | null;
   missionControlUserId: string | null;
   draftsListName: string;
+  /** Custom fields shown on task rows (company setting). */
+  keyFields: string[];
+  /** Vault folder of the agent's company, e.g. "Companies/ACME". */
+  companyDir: string;
   proposals: Proposal[];
 }
 
@@ -56,16 +63,23 @@ function requireAccount(ctx: ToolContext) {
   return ctx.account;
 }
 
-function compactTask(t: {
-  id: string;
-  name: string;
-  status: { status: string };
-  due_date: number | null;
-  list: { id: string; name?: string | null };
-  assignees?: Array<{ username?: string | null }> | null;
-  url?: string | null;
-  date_updated: number | null;
-}) {
+function compactTask(
+  t: {
+    id: string;
+    name: string;
+    status: { status: string };
+    due_date: number | null;
+    list: { id: string; name?: string | null };
+    assignees?: Array<{ username?: string | null }> | null;
+    tags?: Array<{ name: string }> | null;
+    url?: string | null;
+    date_updated: number | null;
+    date_closed?: number | null;
+    custom_fields?: ClickUpCustomField[] | null;
+  },
+  fieldNames?: string[],
+) {
+  const fields = keyFields(t.custom_fields, fieldNames);
   return {
     id: t.id,
     name: t.name,
@@ -73,9 +87,35 @@ function compactTask(t: {
     due: t.due_date ? new Date(t.due_date).toISOString() : null,
     list: t.list.name ?? t.list.id,
     assignees: (t.assignees ?? []).map((a) => a.username ?? "?"),
+    ...(t.tags?.length ? { tags: t.tags.map((x) => x.name) } : {}),
+    ...(Object.keys(fields).length ? { fields } : {}),
     updated: t.date_updated ? new Date(t.date_updated).toISOString() : null,
+    ...(t.date_closed ? { closed: new Date(t.date_closed).toISOString() } : {}),
     url: t.url ?? null,
   };
+}
+
+/** Runs async jobs with a small concurrency limit (ClickUp rate limit friendly). */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        out[i] = await fn(items[i]);
+      }
+    }),
+  );
+  return out;
+}
+
+async function latestComment(ctx: ToolContext, taskId: string) {
+  const { comments } = await clientFor(ctx.account!).getTaskComments(taskId);
+  const newest = [...comments].sort((a, b) => (b.date ?? 0) - (a.date ?? 0))[0];
+  return newest
+    ? { by: newest.user?.username ?? "?", at: newest.date ? new Date(newest.date).toISOString() : null, text: (newest.comment_text ?? "").slice(0, 400) }
+    : null;
 }
 
 async function liveTask(ctx: ToolContext, taskId: string) {
@@ -107,7 +147,19 @@ const TOOLS: Record<string, ToolDef> = {
           due_before: { type: "string", description: "ISO date/time; only tasks due before this" },
           due_after: { type: "string", description: "ISO date/time; only tasks due after this" },
           query: { type: "string", description: "Case-insensitive text that must appear in the task name" },
-          limit: { type: "integer", description: "Max rows (default 30, max 60)" },
+          field_equals: {
+            type: "object",
+            additionalProperties: { type: "string" },
+            description: "Custom field filters by readable value, e.g. {\"Client Code\": \"NOVA\", \"Format\": \"VID\"}",
+          },
+          tags: { type: "array", items: { type: "string" }, description: "Only tasks with at least one of these tags" },
+          updated_after: { type: "string", description: "ISO date/time; only tasks changed after this (e.g. 'what happened since yesterday')" },
+          include_closed: { type: "boolean", description: "Also return closed/done tasks (default false)" },
+          with_last_comment: {
+            type: "boolean",
+            description: "Add each task's newest comment (who, when, text) — use it to see what was last done. Max 40 tasks.",
+          },
+          limit: { type: "integer", description: "Max rows (default 30, max 80)" },
         },
         additionalProperties: false,
       },
@@ -119,7 +171,12 @@ const TOOLS: Record<string, ToolDef> = {
       due_before: iso.optional(),
       due_after: iso.optional(),
       query: z.string().max(120).optional(),
-      limit: z.number().int().min(1).max(60).optional(),
+      field_equals: z.record(z.string().max(60), z.string().max(120)).optional(),
+      tags: z.array(z.string().max(60)).max(10).optional(),
+      updated_after: iso.optional(),
+      include_closed: z.boolean().optional(),
+      with_last_comment: z.boolean().optional(),
+      limit: z.number().int().min(1).max(80).optional(),
     }),
     run: async (input: {
       statuses?: string[];
@@ -128,13 +185,22 @@ const TOOLS: Record<string, ToolDef> = {
       due_before?: string;
       due_after?: string;
       query?: string;
+      field_equals?: Record<string, string>;
+      tags?: string[];
+      updated_after?: string;
+      include_closed?: boolean;
+      with_last_comment?: boolean;
       limit?: number;
     }, ctx) => {
       const account = requireAccount(ctx);
       const client = clientFor(account);
-      const rows: ReturnType<typeof compactTask>[] = [];
+      const limit = input.limit ?? 30;
       const q = input.query?.toLowerCase();
-      for (let page = 0; page < 5 && rows.length < (input.limit ?? 30); page++) {
+      const tagSet = input.tags?.map((t) => t.toLowerCase());
+      const matched: Array<Parameters<typeof compactTask>[0]> = [];
+      // Client-side filters (fields/tags/name) may need more pages.
+      const maxPages = input.field_equals || tagSet || q ? 10 : 5;
+      for (let page = 0; page < maxPages && matched.length < limit; page++) {
         const res = await client.getTeamTasks(account.teamId!, {
           spaceIds: account.selectedSpaceIds,
           page,
@@ -143,12 +209,24 @@ const TOOLS: Record<string, ToolDef> = {
           assignees: input.assigned_to_me ? [account.externalUserId] : undefined,
           dueDateLtMs: input.due_before ? Date.parse(input.due_before) : undefined,
           dueDateGtMs: input.due_after ? Date.parse(input.due_after) : undefined,
+          dateUpdatedGtMs: input.updated_after ? Date.parse(input.updated_after) : undefined,
+          includeClosed: input.include_closed,
         });
-        for (const t of res.tasks) if (isOpenTask(t) && (!q || t.name.toLowerCase().includes(q))) rows.push(compactTask(t));
+        for (const t of res.tasks) {
+          if (!input.include_closed && !isOpenTask(t)) continue;
+          if (q && !t.name.toLowerCase().includes(q)) continue;
+          if (tagSet && !(t.tags ?? []).some((g) => tagSet.includes(g.name.toLowerCase()))) continue;
+          if (input.field_equals && !matchesFieldFilter(t.custom_fields, input.field_equals)) continue;
+          matched.push(t);
+        }
         if (res.last_page !== false || res.tasks.length === 0) break;
       }
-      const out = rows.slice(0, input.limit ?? 30);
-      return JSON.stringify({ count: out.length, tasks: out });
+      const rows = matched.slice(0, limit).map((t) => compactTask(t, ctx.keyFields));
+      if (input.with_last_comment && ctx.agent.permissions.includes("read_comments")) {
+        const withComments = await mapLimit(rows.slice(0, 40), 6, async (r) => ({ ...r, last_comment: await latestComment(ctx, r.id).catch(() => null) }));
+        return JSON.stringify({ count: rows.length, tasks: [...withComments, ...rows.slice(40)] });
+      }
+      return JSON.stringify({ count: rows.length, tasks: rows });
     },
   },
 
@@ -203,7 +281,7 @@ const TOOLS: Record<string, ToolDef> = {
       const canComments = ctx.agent.permissions.includes("read_comments") && input.with_comments !== false;
       const comments = canComments ? (await clientFor(ctx.account!).getTaskComments(task.id)).comments.slice(0, 8) : [];
       return JSON.stringify({
-        ...compactTask(task),
+        ...compactTask(task, ctx.keyFields),
         description: (task.markdown_description ?? task.text_content ?? "").slice(0, 6000),
         comments: comments.map((c) => ({
           by: c.user?.username ?? "?",
@@ -313,51 +391,159 @@ const TOOLS: Record<string, ToolDef> = {
     },
   },
 
+  list_task_templates: {
+    permission: "draft_task",
+    definition: {
+      name: "list_task_templates",
+      description: "List the workspace's ClickUp task templates (id + name). Use a template id with draft_task so the new task gets the template's structure, checklists and subtasks.",
+      input_schema: {
+        type: "object",
+        properties: { query: { type: "string", description: "Optional text the template name must contain" } },
+        additionalProperties: false,
+      },
+    },
+    input: z.object({ query: z.string().max(80).optional() }),
+    run: async (input: { query?: string }, ctx) => {
+      const account = requireAccount(ctx);
+      const client = clientFor(account);
+      const all: Array<{ id: string; name: string }> = [];
+      for (let page = 0; page < 3; page++) {
+        const { templates } = await client.getTaskTemplates(account.teamId!, page);
+        all.push(...templates);
+        if (templates.length < 100) break;
+      }
+      const q = input.query?.toLowerCase();
+      return JSON.stringify(all.filter((t) => !q || t.name.toLowerCase().includes(q)).map((t) => ({ id: t.id, name: t.name.trim() })));
+    },
+  },
+
   draft_task: {
     permission: "draft_task",
     definition: {
       name: "draft_task",
-      description:
-        "Create a NEW task as a draft in Dan's private drafts list. On approval it is created in the target list and the draft is removed. Write the task as Dan would (no mention of agents/AI). Use list_structure to find the target list id.",
+      description: [
+        "Create or revise a NEW task as a draft in Dan's private drafts list; Dan approves it in the village, then it is MOVED into the target list (status + custom fields applied).",
+        "• New plain task: target_list_id + name + description_markdown.",
+        "• From a ClickUp template: target_list_id + name + template_id (no description yet). The result shows the template's description — fill it in and call draft_task again with draft_task_id.",
+        "• Revise an existing draft: draft_task_id + what changes. target_list_id, status and fields from earlier in this conversation are kept unless you pass new ones — after a page reload pass them again.",
+        "fields = custom fields by readable value, e.g. {\"Client Code\": \"NOVA\", \"Format\": \"IMG\", \"Google Drive\": \"https://…\"}; they are checked against the target list now and set on approval.",
+        "Write as Dan would (no mention of agents/AI).",
+      ].join("\n"),
       input_schema: {
         type: "object",
         properties: {
           target_list_id: { type: "string" },
           name: { type: "string" },
           description_markdown: { type: "string" },
+          template_id: { type: "string", description: "ClickUp task template id (from list_task_templates), e.g. t-86cb24gyz" },
+          draft_task_id: { type: "string", description: "Revise this existing draft instead of creating a new one" },
+          status: { type: "string", description: "Status in the target list after approval (exact name), e.g. \"briefing\"" },
+          fields: { type: "object", additionalProperties: { type: "string" } },
           due_date: { type: "string", description: "ISO date/time (optional)" },
           priority: { type: "integer", description: "1 urgent, 2 high, 3 normal, 4 low (optional)" },
         },
-        required: ["target_list_id", "name", "description_markdown"],
         additionalProperties: false,
       },
     },
     input: z.object({
-      target_list_id: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/),
-      name: z.string().min(1).max(250),
-      description_markdown: z.string().max(20_000),
+      target_list_id: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/).optional(),
+      name: z.string().min(1).max(250).optional(),
+      description_markdown: z.string().max(20_000).optional(),
+      template_id: z.string().regex(/^t-[A-Za-z0-9_-]{1,40}$/).optional(),
+      draft_task_id: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/).optional(),
+      status: z.string().max(80).optional(),
+      fields: z.record(z.string().max(60), z.string().max(2000)).optional(),
       due_date: iso.optional(),
       priority: z.number().int().min(1).max(4).optional(),
     }),
     run: async (
-      input: { target_list_id: string; name: string; description_markdown: string; due_date?: string; priority?: number },
+      raw: {
+        target_list_id?: string;
+        name?: string;
+        description_markdown?: string;
+        template_id?: string;
+        draft_task_id?: string;
+        status?: string;
+        fields?: Record<string, string>;
+        due_date?: string;
+        priority?: number;
+      },
       ctx,
     ) => {
-      assertDiscreet(`${input.name}\n${input.description_markdown}`);
+      // Revising a draft keeps target/status/fields from its earlier card in this conversation.
+      const prev = raw.draft_task_id ? ctx.proposals.find((x) => x.id === `p_d_${raw.draft_task_id}`)?.args : undefined;
+      const input = {
+        ...raw,
+        target_list_id: raw.target_list_id ?? (prev?.target_list_id as string | undefined),
+        status: raw.status ?? (prev?.status as string | undefined),
+        fields: raw.fields ?? (prev?.fields as Record<string, string> | undefined),
+      };
+      if (!input.target_list_id) throw new Error("target_list_id is needed (the list the task should go to).");
+      const targetListId = input.target_list_id;
+      assertDiscreet(`${input.name ?? ""}\n${input.description_markdown ?? ""}\n${Object.values(input.fields ?? {}).join("\n")}`);
       const account = requireAccount(ctx);
+      const client = clientFor(account);
+
+      // Check target list, status and fields NOW so mistakes come back to the agent, not to Dan.
+      const target = await client.getList(targetListId);
+      if (!account.selectedSpaceIds.includes(target.space.id)) throw new Error("The target list is outside the allowed spaces.");
+      if (input.status && !(target.statuses ?? []).some((st) => st.status.toLowerCase() === input.status!.toLowerCase())) {
+        throw new Error(`Status “${input.status}” does not exist in ${target.name}. Statuses: ${(target.statuses ?? []).map((st) => st.status).join(", ")}`);
+      }
+      if (input.fields && Object.keys(input.fields).length) {
+        const { fields } = await client.getListFields(target.id);
+        for (const [name, value] of Object.entries(input.fields)) {
+          const def = fields.find((f) => f.name.toLowerCase() === name.toLowerCase());
+          if (!def) throw new Error(`${target.name} has no custom field “${name}”.`);
+          apiValueFor(def, value); // throws a helpful message for wrong options/values
+        }
+      }
+
       const draftsListId = await findDraftsList(ctx);
-      const draft = await clientFor(account).createTask(draftsListId, {
-        name: input.name,
-        markdown_content: input.description_markdown,
+      const timing = {
         ...(input.due_date ? { due_date: Date.parse(input.due_date), due_date_time: input.due_date.includes("T") } : {}),
         ...(input.priority ? { priority: input.priority } : {}),
-      });
-      return newProposal(
-        ctx,
-        "draft_task",
-        { draft_task_id: draft.id, target_list_id: input.target_list_id },
-        `New task “${input.name}”`,
-      );
+      };
+      let draftId: string;
+      let note = "";
+      if (input.draft_task_id) {
+        const existing = await client.getTask(input.draft_task_id);
+        if (existing.list.id !== draftsListId) throw new Error("draft_task_id must be a task in the drafts list.");
+        await client.updateTask(existing.id, {
+          ...(input.name ? { name: input.name } : {}),
+          ...(input.description_markdown !== undefined ? { markdown_description: input.description_markdown } : {}),
+          ...timing,
+        });
+        draftId = existing.id;
+      } else if (input.template_id) {
+        if (!input.name) throw new Error("A name is needed for a new task.");
+        const created = await client.createTaskFromTemplate(draftsListId, input.template_id, input.name);
+        draftId = created.id;
+        if (input.description_markdown) await client.updateTask(draftId, { markdown_description: input.description_markdown, ...timing });
+        else {
+          if (Object.keys(timing).length) await client.updateTask(draftId, timing);
+          const fresh = await client.getTask(draftId);
+          note = `\nThe draft was created from the template. Its description currently is:\n---\n${(fresh.markdown_description ?? fresh.text_content ?? "(empty)").slice(0, 6000)}\n---\nFill in the template (keep its structure) and call draft_task again with draft_task_id="${draftId}".`;
+        }
+      } else {
+        if (!input.name || input.description_markdown === undefined) throw new Error("A new task needs a name and description_markdown (or a template_id).");
+        const created = await client.createTask(draftsListId, { name: input.name, markdown_content: input.description_markdown, ...timing });
+        draftId = created.id;
+      }
+
+      const draft = await client.getTask(draftId);
+      const args = {
+        draft_task_id: draftId,
+        target_list_id: target.id,
+        ...(input.status ? { status: input.status } : {}),
+        ...(input.fields && Object.keys(input.fields).length ? { fields: input.fields } : {}),
+      };
+      // One approval card per draft: revising a draft replaces its card (same proposal id).
+      const proposal: Proposal = { id: `p_d_${draftId}`, kind: "draft_task", agentId: ctx.agent.id, args, summary: `New task “${draft.name}” → ${target.name}` };
+      const idx = ctx.proposals.findIndex((x) => x.id === proposal.id);
+      if (idx >= 0) ctx.proposals[idx] = proposal;
+      else ctx.proposals.push(proposal);
+      return `Draft ${draftId} is in Dan's drafts list and shown to him for approval (target: ${target.name}). Nothing in the target list has changed yet.${note}`;
     },
   },
 
@@ -382,6 +568,166 @@ const TOOLS: Record<string, ToolDef> = {
     },
   },
 
+  find_docs: {
+    permission: "read_meeting_notes",
+    definition: {
+      name: "find_docs",
+      description: "Find ClickUp Docs (e.g. documentation of recurring meetings, client docs) in the allowed spaces by words in the doc name. Returns id, name, last update.",
+      input_schema: {
+        type: "object",
+        properties: { query: { type: "string", description: "Words that must appear in the doc name, e.g. a client code" } },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
+    input: z.object({ query: z.string().min(2).max(80) }),
+    run: async (input: { query: string }, ctx) => {
+      const account = requireAccount(ctx);
+      const client = clientFor(account);
+      const words = input.query.toLowerCase().split(/\s+/).filter(Boolean);
+      const hits: Array<{ id: string; name: string; updated: string | null; parent: { id: string; type: number } }> = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 6; page++) {
+        const res = await client.searchDocs(account.teamId!, cursor);
+        for (const d of res.docs) {
+          const name = (d.name ?? "").toLowerCase();
+          if (d.parent && words.every((w) => name.includes(w))) {
+            hits.push({ id: d.id, name: d.name ?? "", updated: d.date_updated ? new Date(d.date_updated).toISOString() : null, parent: d.parent });
+          }
+        }
+        cursor = res.next_cursor ?? undefined;
+        if (!cursor) break;
+      }
+      const allowed = await mapLimit(hits.slice(0, 30), 4, async (h) => ((await docInAllowedSpace(ctx, h.parent)) ? h : null));
+      return JSON.stringify(allowed.filter(Boolean).slice(0, 15).map((h) => ({ id: h!.id, name: h!.name, updated: h!.updated })));
+    },
+  },
+
+  read_doc: {
+    permission: "read_meeting_notes",
+    definition: {
+      name: "read_doc",
+      description: "Read a ClickUp Doc (all pages, as text) live. Only docs in the allowed spaces.",
+      input_schema: { type: "object", properties: { doc_id: { type: "string" } }, required: ["doc_id"], additionalProperties: false },
+    },
+    input: z.object({ doc_id: z.string().regex(/^[A-Za-z0-9_-]{1,60}$/) }),
+    run: async (input: { doc_id: string }, ctx) => {
+      const account = requireAccount(ctx);
+      const client = clientFor(account);
+      // Find the doc's parent to enforce the space rule.
+      let parent: { id: string; type: number } | null = null;
+      let cursor: string | undefined;
+      for (let page = 0; page < 6 && !parent; page++) {
+        const res = await client.searchDocs(account.teamId!, cursor);
+        parent = res.docs.find((d) => d.id === input.doc_id)?.parent ?? null;
+        cursor = res.next_cursor ?? undefined;
+        if (!cursor) break;
+      }
+      if (!parent || !(await docInAllowedSpace(ctx, parent))) throw new Error("That doc is not in the spaces you may use.");
+      const pages = await client.getDocPages(account.teamId!, input.doc_id);
+      const flat: string[] = [];
+      const walk = (ps: unknown[]) => {
+        for (const raw of ps) {
+          const pg = raw as { name?: string | null; content?: string | null; pages?: unknown[] | null };
+          flat.push(`## ${pg.name ?? "Page"}\n${pg.content ?? ""}`);
+          if (pg.pages?.length) walk(pg.pages);
+        }
+      };
+      walk(pages);
+      return flat.join("\n\n").slice(0, 15_000) || "(empty doc)";
+    },
+  },
+
+  find_meeting_notes: {
+    permission: "read_meeting_notes",
+    definition: {
+      name: "find_meeting_notes",
+      description: "Search Dan's own meeting notes (stored in his vault after he shared them) by words in the file name, e.g. a client code or meeting title. Returns the newest matching notes with their text.",
+      input_schema: {
+        type: "object",
+        properties: { query: { type: "string" }, limit: { type: "integer", description: "Max notes (default 3)" } },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
+    input: z.object({ query: z.string().min(2).max(80), limit: z.number().int().min(1).max(5).optional() }),
+    run: async (input: { query: string; limit?: number }, ctx) => {
+      const prefix = `${ctx.companyDir}/Meeting notes/`;
+      const words = input.query.toLowerCase().split(/\s+/).filter(Boolean);
+      const files = (await listVaultFiles())
+        .filter((f) => f.startsWith(prefix) && f.endsWith(".md"))
+        .filter((f) => words.every((w) => f.toLowerCase().includes(w)))
+        .sort()
+        .reverse()
+        .slice(0, input.limit ?? 3);
+      if (!files.length) return "No meeting notes found for this. Ask Dan whether he has notes to share.";
+      const notes = await Promise.all(files.map(async (f) => `### ${f.slice(prefix.length, -3)}\n${((await readVaultFile(f))?.content ?? "").slice(0, 6000)}`));
+      return notes.join("\n\n");
+    },
+  },
+
+  propose_save_meeting_notes: {
+    permission: "read_meeting_notes",
+    definition: {
+      name: "propose_save_meeting_notes",
+      description: "When Dan shares meeting notes (e.g. from the Google Meet notetaker), propose saving them in his vault so they can be used for the next preparation. Keep his text; add a short summary and the client code if known. Dan approves before it is saved.",
+      input_schema: {
+        type: "object",
+        properties: {
+          date: { type: "string", description: "Meeting date YYYY-MM-DD" },
+          title: { type: "string", description: "Short title incl. client code, e.g. \"NOVA weekly\"" },
+          client_code: { type: "string" },
+          summary: { type: "string", description: "3–6 bullet summary: decisions, open points, next steps" },
+          notes: { type: "string", description: "The notes Dan provided" },
+        },
+        required: ["date", "title", "notes"],
+        additionalProperties: false,
+      },
+    },
+    input: z.object({
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      title: z.string().min(2).max(80).regex(/^[^/\\:*?"<>|#^[\]]+$/, "no special characters in the title"),
+      client_code: z.string().max(20).optional(),
+      summary: z.string().max(3000).optional(),
+      notes: z.string().min(10).max(60_000),
+    }),
+    run: async (input: { date: string; title: string; client_code?: string; summary?: string; notes: string }, ctx) =>
+      newProposal(ctx, "meeting_notes", { ...input, company_dir: ctx.companyDir }, `Save meeting notes “${input.date} ${input.title}” in your vault`),
+  },
+
+  resolve_inbox_item: {
+    permission: null,
+    definition: {
+      name: "resolve_inbox_item",
+      description: "Mark one of your open 'decide later' inbox items as handled after Dan decided (learned → you proposed the rule; discarded → not feedback; done → it was a request you fulfilled).",
+      input_schema: {
+        type: "object",
+        properties: {
+          file: { type: "string", description: "Inbox file path as shown in your context" },
+          heading: { type: "string", description: "The item's heading line, e.g. \"11:51 — feedback for Otto (Client Follow-up)\"" },
+          decision: { type: "string", enum: ["learned", "discarded", "done"] },
+        },
+        required: ["file", "heading", "decision"],
+        additionalProperties: false,
+      },
+    },
+    input: z.object({ file: z.string().max(300), heading: z.string().max(200), decision: z.enum(["learned", "discarded", "done"]) }),
+    run: async (input: { file: string; heading: string; decision: "learned" | "discarded" | "done" }, ctx) => {
+      if (!input.file.startsWith(`${ctx.companyDir}/Inbox/`) || input.file.includes("..")) throw new Error("Not an inbox file of your company.");
+      const file = await readVaultFile(input.file);
+      if (!file) throw new Error("Inbox file not found.");
+      if (!file.content.includes(`agent: ${ctx.agent.id}`)) throw new Error("That inbox file belongs to another agent.");
+      const at = file.content.indexOf(input.heading);
+      if (at < 0) throw new Error("Item not found in that file.");
+      const open = file.content.indexOf("- [ ] decide: learn / discard", at);
+      if (open < 0) throw new Error("That item is already resolved.");
+      const day = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Berlin" });
+      const updated = `${file.content.slice(0, open)}- [x] decided ${day}: ${input.decision}${file.content.slice(open + "- [ ] decide: learn / discard".length)}`;
+      await writeVaultFile(input.file, updated, `${ctx.agent.role}: inbox item ${input.decision}`, file.sha);
+      return `Marked as ${input.decision}.`;
+    },
+  },
+
   propose_playbook_rule: {
     permission: null,
     definition: {
@@ -395,6 +741,7 @@ const TOOLS: Record<string, ToolDef> = {
           rule: { type: "string" },
           test_case: { type: "string", description: "Given … → expected …" },
           source: { type: "string", description: "Short note what led to this rule (no ClickUp content)" },
+          replaces: { type: "string", description: "If this rule answers a “to confirm” line of your playbook: that line's text (it is removed on approval)" },
         },
         required: ["file", "rule", "test_case", "source"],
         additionalProperties: false,
@@ -405,8 +752,9 @@ const TOOLS: Record<string, ToolDef> = {
       rule: z.string().min(5).max(1200),
       test_case: z.string().min(5).max(800),
       source: z.string().max(400),
+      replaces: z.string().max(600).optional(),
     }),
-    run: async (input: { file: "craft" | "context"; rule: string; test_case: string; source: string }, ctx) =>
+    run: async (input: { file: "craft" | "context"; rule: string; test_case: string; source: string; replaces?: string }, ctx) =>
       newProposal(ctx, "playbook_rule", input, `New ${input.file === "craft" ? "craft" : "context"} rule: ${input.rule.slice(0, 90)}`),
   },
 };
@@ -427,6 +775,20 @@ async function findDraftsList(ctx: ToolContext): Promise<string> {
     if (hit) return hit.id;
   }
   throw new Error(`The drafts list “${ctx.draftsListName}” does not exist yet. Ask Dan to create it in Settings.`);
+}
+
+/** Doc parents: 4 = space, 5 = folder, 6 = list. Workspace-level/private docs are not allowed. */
+async function docInAllowedSpace(ctx: ToolContext, parent: { id: string; type: number }) {
+  const account = requireAccount(ctx);
+  const client = clientFor(account);
+  try {
+    if (parent.type === 4) return account.selectedSpaceIds.includes(parent.id);
+    if (parent.type === 5) return account.selectedSpaceIds.includes((await client.getFolder(parent.id)).space.id);
+    if (parent.type === 6) return account.selectedSpaceIds.includes((await client.getList(parent.id)).space.id);
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 /** Tool definitions for an agent, filtered by its permissions (stable order for prompt caching). */

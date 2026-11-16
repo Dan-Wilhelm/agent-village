@@ -17,7 +17,7 @@ type ApiMessage = Anthropic.Beta.BetaMessageParam;
 
 export interface ProposalView {
   id: string;
-  kind: "comment" | "task_change" | "draft_task" | "mission_control_message" | "playbook_rule";
+  kind: "comment" | "task_change" | "draft_task" | "mission_control_message" | "playbook_rule" | "meeting_notes";
   agentId: string;
   args: Record<string, unknown>;
   summary: string;
@@ -49,6 +49,9 @@ interface ConversationState {
   conversations: Record<string, Conversation>;
   order: string[];
   active: string | null;
+  /** The dock is hidden ("Hide"); opening or focusing a conversation shows it again. */
+  dockCollapsed: boolean;
+  setDockCollapsed: (v: boolean) => void;
   open: (
     agentId: string,
     agentName: string,
@@ -79,6 +82,8 @@ export const useConversations = create<ConversationState>()((set, get) => {
     conversations: {},
     order: [],
     active: null,
+    dockCollapsed: false,
+    setDockCollapsed: (v) => set({ dockCollapsed: v }),
 
     open: (agentId, agentName, opts) => {
       sceneBridge.unlock();
@@ -95,13 +100,22 @@ export const useConversations = create<ConversationState>()((set, get) => {
       } else if (opts?.mode) {
         patch(agentId, (c) => ({ ...c, mode: opts.mode! }));
       }
-      set({ active: agentId });
-      if (opts?.opening) void get().send(agentId, opts.opening, opts.triggerLabel ? { asNote: opts.triggerLabel } : undefined);
+      set({ active: agentId, dockCollapsed: false });
+      if (!opts?.opening) return;
+      const conv = get().conversations[agentId];
+      if (conv?.streaming) {
+        // Never drop or double-send: tell Dan the agent is still busy with the last message.
+        patch(agentId, (c) => ({ ...c, items: [...c.items, { kind: "note", text: "Still answering your last message — send this again in a moment." }] }));
+        return;
+      }
+      const lastUser = conv?.items.findLast((it) => it.kind === "user");
+      if (lastUser && lastUser.kind === "user" && lastUser.text === opts.opening && conv?.items.at(-1)?.kind !== "error") return; // same request again
+      void get().send(agentId, opts.opening, opts.triggerLabel ? { asNote: opts.triggerLabel } : undefined);
     },
 
     focus: (agentId) => {
       sceneBridge.unlock();
-      set({ active: agentId });
+      set({ active: agentId, dockCollapsed: false });
     },
 
     close: (agentId) => {
@@ -187,10 +201,11 @@ export const useConversations = create<ConversationState>()((set, get) => {
               if (event.status === "running") setAgentActivity(agentId, "working", toolLabel(event.name));
             } else if (event.type === "proposal") {
               const p = event.proposal as Omit<ProposalView, "state">;
+              // A revised draft keeps its id: update the card in place instead of adding a second one.
               patch(agentId, (x) => ({
                 ...x,
                 proposals: { ...x.proposals, [p.id]: { ...p, state: "pending" } },
-                items: [...x.items, { kind: "proposal", id: p.id }],
+                items: x.proposals[p.id] ? x.items : [...x.items, { kind: "proposal", id: p.id }],
               }));
             } else if (event.type === "done") {
               patch(agentId, (x) => ({ ...x, history: [...x.history, ...(event.messages as ApiMessage[])] }));

@@ -31,6 +31,7 @@ export class ClickUpError extends Error {
 const ms = z.union([z.string(), z.number()]).nullish().transform((v) => (v == null || v === "" ? null : Number(v)));
 
 const statusSchema = z.object({
+  id: z.coerce.string().nullish(),
   status: z.string(),
   type: z.string().nullish(),
   color: z.string().nullish(),
@@ -97,8 +98,61 @@ export const taskSchema = z.object({
   space: z.object({ id: z.coerce.string() }),
   markdown_description: z.string().nullish(),
   text_content: z.string().nullish(),
+  custom_fields: z.array(customFieldSchema()).nullish(),
 });
 export type ClickUpTask = z.infer<typeof taskSchema>;
+
+/** Custom field definition (+ value when it comes with a task). Options for drop_down/labels. */
+function customFieldSchema() {
+  return z.object({
+    id: z.string(),
+    name: z.string(),
+    type: z.string(),
+    value: z.unknown().optional(),
+    type_config: z
+      .object({
+        options: z
+          .array(z.object({ id: z.coerce.string(), name: z.string().nullish(), label: z.string().nullish(), orderindex: z.coerce.number().nullish() }))
+          .nullish(),
+      })
+      .passthrough()
+      .nullish(),
+  });
+}
+export type ClickUpCustomField = z.infer<ReturnType<typeof customFieldSchema>>;
+export const listFieldsSchema = z.object({ fields: z.array(customFieldSchema()) });
+
+export const listDetailSchema = z.object({
+  id: z.coerce.string(),
+  name: z.string(),
+  space: z.object({ id: z.coerce.string() }),
+  statuses: z.array(statusSchema).nullish(),
+});
+
+export const taskTemplatesSchema = z.object({ templates: z.array(z.object({ id: z.string(), name: z.string() })) });
+
+export const docsPageSchema = z.object({
+  docs: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string().nullish(),
+      parent: z.object({ id: z.coerce.string(), type: z.coerce.number() }).nullish(),
+      date_updated: ms,
+      deleted: z.boolean().nullish(),
+      archived: z.boolean().nullish(),
+    }),
+  ),
+  next_cursor: z.string().nullish(),
+});
+export const docPagesSchema = z.array(
+  z.lazy(() => docPageSchema),
+);
+const docPageSchema: z.ZodType<{ id: string; name?: string | null; content?: string | null; pages?: unknown[] | null }> = z.object({
+  id: z.string(),
+  name: z.string().nullish(),
+  content: z.string().nullish(),
+  pages: z.array(z.unknown()).nullish(),
+});
 
 export const tasksPageSchema = z.object({ tasks: z.array(taskSchema), last_page: z.boolean().nullish() });
 
@@ -160,6 +214,8 @@ export interface NewTask {
 }
 
 export interface TaskChange {
+  name?: string;
+  markdown_description?: string;
   status?: string;
   due_date?: number | null;
   due_date_time?: boolean;
@@ -224,8 +280,8 @@ export function createClickUpClient(opts: ClickUpClientOptions) {
         /* non-JSON body */
       }
       if (!res.ok) {
-        const err = (json ?? {}) as { err?: string; ECODE?: string };
-        throw new ClickUpError(err.err ?? `ClickUp request failed (${res.status})`, res.status, err.ECODE);
+        const err = (json ?? {}) as { err?: string; message?: string; ECODE?: string };
+        throw new ClickUpError(err.err ?? err.message ?? `ClickUp request failed (${res.status})`, res.status, err.ECODE);
       }
       if (!schema) return undefined as T;
       const parsed = schema.safeParse(json);
@@ -300,8 +356,53 @@ export function createClickUpClient(opts: ClickUpClientOptions) {
         query: new URLSearchParams({ limit: String(limit) }),
         v3: true,
       }),
-    getList: (listId: string) =>
-      request("GET", `/list/${encodeURIComponent(listId)}`, z.object({ id: z.coerce.string(), name: z.string(), space: z.object({ id: z.coerce.string() }) })),
+    getList: (listId: string) => request("GET", `/list/${encodeURIComponent(listId)}`, listDetailSchema),
+    getListFields: (listId: string) => request("GET", `/list/${encodeURIComponent(listId)}/field`, listFieldsSchema),
+    getFolder: (folderId: string) =>
+      request("GET", `/folder/${encodeURIComponent(folderId)}`, z.object({ id: z.coerce.string(), space: z.object({ id: z.coerce.string() }) })),
+    setCustomField: (taskId: string, fieldId: string, value: unknown) =>
+      request("POST", `/task/${encodeURIComponent(taskId)}/field/${encodeURIComponent(fieldId)}`, null, { body: { value } }),
+    // --- task templates ---
+    getTaskTemplates: (teamId: string, page = 0) =>
+      request("GET", `/team/${encodeURIComponent(teamId)}/taskTemplate`, taskTemplatesSchema, {
+        query: new URLSearchParams({ page: String(page) }),
+      }),
+    createTaskFromTemplate: async (listId: string, templateId: string, name: string) => {
+      const res = await request(
+        "POST",
+        `/list/${encodeURIComponent(listId)}/taskTemplate/${encodeURIComponent(templateId)}`,
+        z.object({ id: z.coerce.string().nullish(), task: z.object({ id: z.coerce.string() }).passthrough().nullish() }).passthrough(),
+        { body: { name } },
+      );
+      const id = res.id ?? res.task?.id;
+      if (!id) throw new ClickUpError("ClickUp did not return the new task id", 502);
+      return { id };
+    },
+    /** v3: moves a task to another home list (keeps subtasks/checklists); maps the status by id. */
+    moveTask: (teamId: string, taskId: string, listId: string, statusMapping?: { from: string; to: string }) =>
+      request(
+        "PUT",
+        `/workspaces/${encodeURIComponent(teamId)}/tasks/${encodeURIComponent(taskId)}/home_list/${encodeURIComponent(listId)}`,
+        null,
+        {
+          v3: true,
+          body: {
+            move_custom_fields: false,
+            ...(statusMapping ? { status_mappings: [{ source_status: statusMapping.from, destination_status: statusMapping.to }] } : {}),
+          },
+        },
+      ),
+    // --- docs (v3) ---
+    searchDocs: (teamId: string, cursor?: string) =>
+      request("GET", `/workspaces/${encodeURIComponent(teamId)}/docs`, docsPageSchema, {
+        v3: true,
+        query: new URLSearchParams({ limit: "100", deleted: "false", archived: "false", ...(cursor ? { cursor } : {}) }),
+      }),
+    getDocPages: (teamId: string, docId: string) =>
+      request("GET", `/workspaces/${encodeURIComponent(teamId)}/docs/${encodeURIComponent(docId)}/pages`, docPagesSchema, {
+        v3: true,
+        query: new URLSearchParams({ max_page_depth: "-1", content_format: "text/md" }),
+      }),
     createList: (spaceId: string, name: string) =>
       request("POST", `/space/${encodeURIComponent(spaceId)}/list`, z.object({ id: z.coerce.string(), name: z.string() }), {
         body: { name },

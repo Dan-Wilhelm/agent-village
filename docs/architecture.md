@@ -181,6 +181,24 @@ In this document "I/me" is the owner, the one person who uses an Agent Village i
 - The village polls `/api/visits` every 30 s while visible; due visits send the agent walking to the office. Opening the visit marks it delivered and the agent builds its content live (the trigger line is shown as a note, not stored as the owner's words).
 - Still open: a global "office hours / I'm away" switch that pauses non-urgent visits.
 
+### 4.5a Phase 4: the MVP agents (built 2026-11-16)
+
+Each agent has a **starting playbook** in the vault (`Craft.md` = transferable, `Context.md` = ACME specifics, `Test cases.md`, `Changelog.md`). Assumptions are marked *to confirm*; in the introduction the agent asks them as short yes/no questions and turns answers into rules (`propose_playbook_rule` with `replaces` removes the confirmed line on approval). The company note holds the shared ClickUp conventions (pipelines, statuses, key custom fields) — structure only, never task content.
+
+| Agent | Job | Main sources |
+|---|---|---|
+| Kai — Daily Briefing | Daily Kaizen L1 briefing: today, since yesterday, problems with owner + next step, decisions | tasks changed since last working day, due/overdue, calendar |
+| Otto — Client Follow-up | What lies with which client since when; follow-up due after the limit | `external review` + newest comment per task, grouped by Client Code and Format |
+| Rita — Internal Review | 3×/day: images/videos waiting for Dan's review | `internal review` in Production pipeline, Drive link, editor |
+| Mila — Meeting Prep | One-page brief 10 min before client meetings; saves Dan's notes afterwards | calendar, client tasks (Client Code), meeting notes in the vault, ClickUp docs |
+| Tess — Static Ad Briefs | Figma links + briefing → brief task from the image template | task templates, custom fields |
+| Vito — Video Tasks | Folder link + brief → video task from the video template | task templates, custom fields |
+| Lena — Landing Pages | Sparring partner; builds the LP brief template with Dan | LP lists and fields |
+
+New agent abilities: `search_tasks` filters by custom field (readable values), tags, `updated_after`, closed tasks and can add each task's newest comment; `list_task_templates`; `draft_task` from a template with fields + target status, revisable (one approval card per draft); `find_docs` / `read_doc` (ClickUp docs in allowed spaces only); `find_meeting_notes` / `propose_save_meeting_notes` (Dan's own notes in `Companies/<C>/Meeting notes/`); `resolve_inbox_item` ("decide later" items are brought up on the next visit).
+
+Approving a draft **moves** it from the drafts list into the target list (v3 move: keeps template checklists/subtasks), sets the status and custom fields and verifies that the fields were stored; if the move fails it falls back to a copy and says so.
+
 ### 4.5 The Dispatcher: one input, the right agent comes running
 
 A central feature: I don't need to know which agent to call.
@@ -340,11 +358,11 @@ agent-village/
 
 | Phase | Content |
 |---|---|
-| 0 | This proposal ← **we are here** |
+| 0 | This proposal (done) |
 | 1 | Project setup, login + owner check, world skeleton: office, ClickUp HQ, walking characters, speech bubbles, overlay panel |
 | 2 | ClickUp adapter, encrypted token storage, cache + webhook sync, task overview in ClickUp HQ |
 | 3 | Agent engine: Workflow runs, introduction, training mode, feedback loop, approvals, activity log, push, voice input |
-| 4 | Dispatcher + MVP agents: Daily Team Briefing, Client Review Tracker, Internal Review Reminder, Landing Page / Static Ad Brief / Video task agents, Meeting Prep |
+| 4 | Dispatcher + MVP agents: Daily Team Briefing, Client Review Tracker, Internal Review Reminder, Landing Page / Static Ad Brief / Video task agents, Meeting Prep ← **done 2026-11-16** (see 4.5a) |
 | 5 | Agent creation wizard |
 | 6 | Security review, README, self-hosting setup |
 

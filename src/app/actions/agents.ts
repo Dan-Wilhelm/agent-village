@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { describeTrigger } from "@/agents/schedule";
 
 import { dispatch } from "@/agents/dispatch";
 import { loadRegistry, markIntroduced, renameAgent } from "@/agents/registry";
@@ -20,17 +21,6 @@ export interface RosterAgent {
   home: "office" | "hq" | "workshop" | "library" | "training";
   introduced: boolean;
   triggers: string[];
-}
-
-function describeTrigger(t: { type: string; days?: string[]; time?: string | string[]; minutes?: number; match?: string }) {
-  if (t.type === "schedule") {
-    const days = t.days ?? [];
-    const label =
-      days.join(",") === "mon,tue,wed,thu,fri" ? "weekdays" : days.length === 7 ? "daily" : days.map((d) => d[0].toUpperCase() + d.slice(1)).join(", ");
-    return `${label} at ${[t.time].flat().join(", ")}`;
-  }
-  if (t.type === "before_event") return `${t.minutes} min before ${t.match}`;
-  return "when called";
 }
 
 /** All agents from the vault (settings only — no ClickUp content). */
