@@ -5,7 +5,7 @@ import { requireOwnerForRoute } from "@/lib/auth/owner";
 
 const bodySchema = z.object({
   agentId: z.string().regex(/^[a-z0-9][a-z0-9-]{1,62}$/),
-  kind: z.enum(["comment", "task_change", "draft_task", "mission_control_message", "playbook_rule"]),
+  kind: z.enum(["comment", "task_change", "draft_task", "mission_control_message", "playbook_rule", "meeting_notes"]),
   args: z.record(z.string(), z.unknown()),
   decision: z.enum(["approve", "reject"]),
 });

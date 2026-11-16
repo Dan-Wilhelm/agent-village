@@ -35,12 +35,15 @@ export async function runAgentTurn(opts: {
     account: ctx.account,
     missionControlUserId: ctx.missionControlUserId,
     draftsListName: ctx.draftsListName,
+    keyFields: ctx.keyFields,
+    companyDir: ctx.companyDir,
     proposals: [],
   };
   const isOpus = ctx.agent.model === "claude-opus-5-5";
   const history = [...opts.messages];
   const added: Anthropic.Beta.BetaMessageParam[] = [];
-  let emittedProposals = 0;
+  // Emit new proposals and changed ones (a revised draft keeps its id and replaces its card).
+  const emitted = new Map<string, string>();
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     const stream = client.beta.messages.stream({
@@ -90,8 +93,12 @@ export async function runAgentTurn(opts: {
         return { type: "tool_result" as const, tool_use_id: use.id, content: r.content, ...(r.isError ? { is_error: true } : {}) };
       }),
     );
-    for (const p of toolCtx.proposals.slice(emittedProposals)) opts.emit({ type: "proposal", proposal: p });
-    emittedProposals = toolCtx.proposals.length;
+    for (const p of toolCtx.proposals) {
+      const json = JSON.stringify(p);
+      if (emitted.get(p.id) === json) continue;
+      emitted.set(p.id, json);
+      opts.emit({ type: "proposal", proposal: p });
+    }
 
     const toolMessage: Anthropic.Beta.BetaMessageParam = { role: "user", content: results };
     history.push(toolMessage);

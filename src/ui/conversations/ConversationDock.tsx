@@ -17,7 +17,8 @@ export function ConversationDock() {
   const focus = useConversations((s) => s.focus);
   const open = useConversations((s) => s.open);
   const agents = useVillage((s) => s.agents);
-  const [collapsed, setCollapsed] = useState(false);
+  const collapsed = useConversations((s) => s.dockCollapsed);
+  const setCollapsed = useConversations((s) => s.setDockCollapsed);
 
   // Clicking an agent in the world / pressing E opens its conversation.
   useEffect(
@@ -38,7 +39,7 @@ export function ConversationDock() {
         }
         setCollapsed(false);
       }),
-    [open],
+    [open, setCollapsed],
   );
 
   if (order.length === 0) return null;
@@ -75,7 +76,7 @@ export function ConversationDock() {
           );
         })}
         <span className="flex-1" />
-        <button type="button" onClick={() => setCollapsed((v) => !v)} className="rounded-t-xl bg-ink/70 px-2 py-1 text-xs font-bold text-cream">
+        <button type="button" onClick={() => setCollapsed(!collapsed)} className="rounded-t-xl bg-ink/70 px-2 py-1 text-xs font-bold text-cream">
           {collapsed ? "Show" : "Hide"}
         </button>
       </div>
@@ -268,13 +269,21 @@ function ProposalCard({ proposal: p }: { proposal: ProposalView | undefined }) {
       ? String(p.args.text ?? "")
       : p.kind === "playbook_rule"
         ? `${String(p.args.rule ?? "")}\nTest: ${String(p.args.test_case ?? "")}`
-        : "";
+        : p.kind === "meeting_notes"
+          ? String(p.args.summary ?? String(p.args.notes ?? "").slice(0, 400))
+          : p.kind === "draft_task" && (p.args.fields || p.args.status)
+            ? [
+                ...Object.entries((p.args.fields ?? {}) as Record<string, string>).map(([k, v]) => `${k}: ${v}`),
+                ...(p.args.status ? [`Status: ${String(p.args.status)}`] : []),
+              ].join("\n")
+            : "";
   const label = {
     comment: "Comment (posted as you)",
     task_change: "Task change",
     draft_task: "New task (draft in your drafts list)",
     mission_control_message: "DM to Mission Control (as you)",
     playbook_rule: "Learn a rule",
+    meeting_notes: "Save meeting notes (your vault)",
   }[p.kind];
   return (
     <div className="rounded-2xl border-2 border-wood bg-white px-3 py-2">

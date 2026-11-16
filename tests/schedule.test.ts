@@ -53,3 +53,12 @@ describe("before_event triggers", () => {
     expect(dueEventVisits("mila", mila, events, new Date("2026-11-16T10:01:00Z"))).toHaveLength(0);
   });
 });
+
+describe("trigger descriptions (shown to Dan and to the agent itself)", () => {
+  it("describes schedules, events and on-call", async () => {
+    const { describeTrigger } = await import("@/agents/schedule");
+    expect(describeTrigger({ type: "schedule", days: ["mon", "tue", "wed", "thu", "fri"], time: ["09:00", "13:00"] })).toBe("weekdays at 09:00, 13:00");
+    expect(describeTrigger({ type: "before_event", minutes: 10, match: "client meetings" })).toBe("10 min before client meetings");
+    expect(describeTrigger({ type: "on_call" })).toBe("when called");
+  });
+});

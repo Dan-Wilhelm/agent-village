@@ -3,16 +3,20 @@ import "server-only";
 import type Anthropic from "@anthropic-ai/sdk";
 
 import { getClickUpAccount, type ClickUpAccount } from "@/integrations/clickup/account";
-import { readVaultFile } from "@/integrations/vault/github";
+import { DEFAULT_KEY_FIELDS } from "@/integrations/clickup/fields";
+import { listVaultFiles, readVaultFile } from "@/integrations/vault/github";
 
 import { parseNote } from "./frontmatter";
 import { loadRegistry, type AgentEntry } from "./registry";
+import { describeTrigger } from "./schedule";
 
 export interface AgentContext {
   agent: AgentEntry;
   companyName: string;
   draftsListName: string;
   missionControlUserId: string | null;
+  keyFields: string[];
+  companyDir: string;
   account: ClickUpAccount | null;
   /** Stable system prompt (cached) + a small dynamic block (date/time, mode). */
   system: Anthropic.TextBlockParam[];
@@ -27,6 +31,24 @@ async function body(path: string, max = 12_000) {
 
 const LANG: Record<string, string> = { de: "German", en: "English" };
 
+/** Open "decide later" items of this agent (Dan's own words only), max 5. */
+async function openInboxItems(companyDir: string, agentId: string) {
+  const files = (await listVaultFiles().catch(() => [] as string[])).filter((f) => f.startsWith(`${companyDir}/Inbox/`) && f.endsWith(".md"));
+  const items: string[] = [];
+  for (const f of files.sort()) {
+    const file = await readVaultFile(f).catch(() => null);
+    if (!file || !file.content.includes(`agent: ${agentId}`)) continue;
+    for (const block of file.content.split(/\n(?=## )/).slice(1)) {
+      if (!block.includes("- [ ] decide")) continue;
+      const heading = block.split("\n")[0].replace(/^## /, "").trim();
+      const said = [...new Set(block.split("\n").filter((l) => l.startsWith("> ")).map((l) => l.slice(2).trim()))].join(" / ");
+      items.push(`- file: ${f} | heading: ${heading} | Dan said: ${said.slice(0, 600)}`);
+      if (items.length >= 5) return items;
+    }
+  }
+  return items;
+}
+
 export async function loadAgentContext(agentId: string, mode: "work" | "training" = "work"): Promise<AgentContext> {
   const registry = await loadRegistry();
   const agent = registry.agents.find((a) => a.id === agentId);
@@ -36,13 +58,15 @@ export async function loadAgentContext(agentId: string, mode: "work" | "training
   const team = registry.teams.find((t) => t.company === agent.company && t.name === agent.team);
 
   const dir = agentDir(agent);
-  const [companyBody, teamBody, aboutMe, craft, context, account] = await Promise.all([
+  const companyDir = company.path.split("/").slice(0, -1).join("/");
+  const [companyBody, teamBody, aboutMe, craft, context, account, inbox] = await Promise.all([
     body(company.path),
     team ? body(team.path, 4000) : Promise.resolve(""),
     body("Shared/About me.md", 4000),
     body(`${dir}/Craft.md`),
     body(`${dir}/Context.md`),
     getClickUpAccount(),
+    openInboxItems(companyDir, agent.id),
   ]);
 
   const languages = agent.language.map((l) => LANG[l]).join(" and ");
@@ -58,6 +82,8 @@ ${aboutMe}
 
 <your_profile>
 ${agent.description}
+
+When you come to Dan (Europe/Berlin): ${agent.triggers.map(describeTrigger).join("; ")}. Don't promise other visit times — changing them is a setting Dan makes.
 </your_profile>
 
 <your_playbook_craft>
@@ -82,7 +108,10 @@ ${context || "(empty — you have not learned company-specific rules yet)"}
   const dynamic =
     `Current date and time (Europe/Berlin): ${now}.` +
     (!agent.introduced
-      ? "\nYou have not introduced yourself to Dan yet: briefly introduce yourself (role, what you will do for him) and ask him the concrete questions you need answered to do your job well (e.g. which lists/statuses, times, criteria, language). Propose the answers as playbook rules."
+      ? "\nINTRODUCTION: this is your first conversation with Dan. Briefly introduce yourself (name, role, when you will come by and what you will bring him). Then walk him through the points in your playbook marked “to confirm” — max 3 at a time, as short questions with your assumption, so he can just say yes or correct it. Turn every answer into a playbook rule via propose_playbook_rule (it replaces the assumption). If he asks for real work right away, do it first and continue the introduction afterwards."
+      : "") +
+    (inbox.length
+      ? `\nOPEN “DECIDE LATER” ITEMS from earlier conversations (Dan's words). At a fitting moment (not in the middle of urgent work) ask him briefly what to do with each: learn (propose_playbook_rule), it was a request (do it), or discard. Then call resolve_inbox_item.\n${inbox.join("\n")}`
       : "") +
     (mode === "training"
       ? "\nTRAINING MODE: Dan is teaching you. Listen, ask clarifying questions, summarise what you understood, and propose rules with test cases. Do not do real work in ClickUp now."
@@ -93,6 +122,8 @@ ${context || "(empty — you have not learned company-specific rules yet)"}
     companyName: company.name,
     draftsListName: company.drafts_list ?? "Drafts – pending approval",
     missionControlUserId: company.mission_control_user_id ?? null,
+    keyFields: company.key_fields ?? DEFAULT_KEY_FIELDS,
+    companyDir,
     account,
     system: [
       { type: "text", text: stable, cache_control: { type: "ephemeral" } },
