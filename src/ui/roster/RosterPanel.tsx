@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 
 import { renameAgentAction } from "@/app/actions/agents";
+import { archiveAgentAction, copyTeamAction, createCompanyAction, getWizardOptions } from "@/app/actions/authoring";
 import { useConversations } from "@/ui/conversations/store";
 import { useUi } from "@/ui/uiStore";
 import { useVillage } from "@/world/store";
 
+import { reloadRoster } from "./reload";
 import { useRoster } from "./store";
 
 const STATUS: Record<string, { label: string; color: string }> = {
@@ -27,7 +29,11 @@ export function RosterPanel() {
   const rename = useRoster((s) => s.rename);
   const live = useVillage((s) => s.agents);
   const openConversation = useConversations((s) => s.open);
+  const openWizard = useUi((s) => s.openWizard);
+  const openActivity = useUi((s) => s.openActivity);
   const [pending, start] = useTransition();
+  const [copying, setCopying] = useState<{ id: string; name: string; company: string } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -59,11 +65,32 @@ export function RosterPanel() {
           </h2>
           <span className="text-xs text-ink/60">{agents.length} in your village</span>
           <span className="flex-1" />
+          <button type="button" onClick={() => openActivity()} className="cozy-button bg-white px-3 py-1 text-sm">
+            Activity
+          </button>
+          <button type="button" onClick={() => openWizard({ mode: "create" })} className="cozy-button bg-leaf px-3 py-1 text-sm">
+            + New agent
+          </button>
           <button type="button" onClick={close} className="cozy-button bg-parchment px-3 py-1 text-sm">
             Close
           </button>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {notice && (
+            <p role="status" className="mb-3 rounded-xl bg-leaf/15 px-3 py-2 text-xs font-bold text-ink">
+              {notice}
+            </p>
+          )}
+          {copying && (
+            <CopyTeamDialog
+              team={copying}
+              onCancel={() => setCopying(null)}
+              onDone={(msg) => {
+                setCopying(null);
+                setNotice(msg);
+              }}
+            />
+          )}
           {problems.length > 0 && (
             <div className="mb-4 rounded-xl bg-berry/10 p-3 text-xs">
               <p className="font-black text-berry">Some agent notes in your vault need fixing:</p>
@@ -83,7 +110,15 @@ export function RosterPanel() {
                 .filter((t) => t.company === company)
                 .map((team) => (
                   <div key={team.id} className="mt-2">
-                    <p className="text-xs font-bold text-wood">Team {team.name}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs font-bold text-wood">
+                        Team {team.name}
+                        {team.lead && <span className="ml-1 text-ink/50">· lead: {agents.find((a) => a.id === team.lead)?.name ?? "?"}</span>}
+                      </p>
+                      <button type="button" onClick={() => setCopying({ id: team.id, name: team.name, company })} className="text-[11px] font-bold text-ink/60 underline">
+                        Copy team…
+                      </button>
+                    </div>
                     <ul className="mt-1 grid gap-2 sm:grid-cols-2">
                       {agents
                         .filter((a) => a.company === company && a.team === team.name)
@@ -144,6 +179,26 @@ export function RosterPanel() {
                                 >
                                   Rename
                                 </button>
+                                <button type="button" onClick={() => openWizard({ mode: "edit", agentId: a.id })} className="cozy-button bg-white px-3 py-1 text-xs">
+                                  Settings
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={pending}
+                                  onClick={() => {
+                                    if (!window.confirm(`Archive ${a.name} (${a.role})? The agent leaves the village; its notes move to the Archive folder in your vault.`)) return;
+                                    start(async () => {
+                                      const r = await archiveAgentAction(a.id);
+                                      if (!r.ok) return window.alert(r.message);
+                                      useConversations.getState().close(a.id);
+                                      await reloadRoster().catch(() => null);
+                                      setNotice(`${a.name} was archived (${r.archivedTo}).`);
+                                    });
+                                  }}
+                                  className="cozy-button bg-white px-3 py-1 text-xs text-berry"
+                                >
+                                  Archive
+                                </button>
                               </div>
                             </li>
                           );
@@ -155,6 +210,82 @@ export function RosterPanel() {
           ))}
         </div>
       </section>
+    </div>
+  );
+}
+
+/** Copy a team (its structure + each agent's craft) into another company. */
+function CopyTeamDialog({ team, onCancel, onDone }: { team: { id: string; name: string; company: string }; onCancel: () => void; onDone: (msg: string) => void }) {
+  const [companies, setCompanies] = useState<Array<{ id: string; name: string; connected: boolean }> | null>(null);
+  const [target, setTarget] = useState("");
+  const [newName, setNewName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+
+  useEffect(() => {
+    getWizardOptions()
+      .then((o) => {
+        const others = o.companies.filter((c) => c.name !== team.company);
+        setCompanies(others);
+        setTarget(others[0]?.id ?? "__new");
+      })
+      .catch(() => setError("Could not load companies."));
+  }, [team.company]);
+
+  const copy = () =>
+    start(async () => {
+      setError(null);
+      let companyId = target;
+      let companyName = companies?.find((c) => c.id === target)?.name ?? "";
+      if (target === "__new") {
+        const c = await createCompanyAction(newName);
+        if (!c.ok) return setError(c.message);
+        companyId = c.companyId;
+        companyName = c.name;
+      }
+      const r = await copyTeamAction(team.id, companyId);
+      if (!r.ok) return setError(r.message);
+      await reloadRoster().catch(() => null);
+      onDone(`Team ${team.name} was copied to ${companyName} (${r.copied.length} agents). They bring their craft, learn ${companyName} from scratch and introduce themselves there.`);
+    });
+
+  return (
+    <div className="mb-4 rounded-2xl border-2 border-wood bg-cream p-4 text-sm">
+      <p className="font-black text-wood-dark">Copy team {team.name} to another company</p>
+      <p className="mt-1 text-xs text-ink/70">
+        The agents take their craft (how the job is done) with them. Company context, approvals “without asking” and introductions start fresh.
+      </p>
+      {!companies ? (
+        <p className="mt-2 text-xs text-ink/60">{error ?? "Loading…"}</p>
+      ) : (
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <label className="block">
+            <span className="mb-1 block text-xs font-black text-ink/70">Target company</span>
+            <select className="wiz-input" value={target} onChange={(e) => setTarget(e.target.value)}>
+              {companies.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                  {c.connected ? "" : " (not connected)"}
+                </option>
+              ))}
+              <option value="__new">+ New company…</option>
+            </select>
+          </label>
+          {target === "__new" && (
+            <label className="block">
+              <span className="mb-1 block text-xs font-black text-ink/70">Company name</span>
+              <input className="wiz-input" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Medawi" />
+            </label>
+          )}
+          <button type="button" disabled={pending || (target === "__new" && newName.trim().length < 2)} onClick={copy} className="cozy-button bg-leaf px-3 py-1.5 text-xs disabled:opacity-50">
+            {pending ? "Copying…" : "Copy team"}
+          </button>
+          <button type="button" disabled={pending} onClick={onCancel} className="cozy-button bg-parchment px-3 py-1.5 text-xs">
+            Cancel
+          </button>
+        </div>
+      )}
+      {error && companies && <p className="mt-2 text-xs font-bold text-berry">{error}</p>}
     </div>
   );
 }

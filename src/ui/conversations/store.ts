@@ -23,6 +23,8 @@ export interface ProposalView {
   summary: string;
   state: "pending" | "working" | "approved" | "rejected" | "failed";
   result?: string;
+  /** Executed without asking (allowed for this agent). */
+  auto?: { ok: boolean; message: string };
 }
 
 export type DisplayItem =
@@ -201,10 +203,11 @@ export const useConversations = create<ConversationState>()((set, get) => {
               if (event.status === "running") setAgentActivity(agentId, "working", toolLabel(event.name));
             } else if (event.type === "proposal") {
               const p = event.proposal as Omit<ProposalView, "state">;
+              const state: ProposalView["state"] = p.auto ? (p.auto.ok ? "approved" : "failed") : "pending";
               // A revised draft keeps its id: update the card in place instead of adding a second one.
               patch(agentId, (x) => ({
                 ...x,
-                proposals: { ...x.proposals, [p.id]: { ...p, state: "pending" } },
+                proposals: { ...x.proposals, [p.id]: { ...p, state, ...(p.auto ? { result: p.auto.message } : {}) } },
                 items: x.proposals[p.id] ? x.items : [...x.items, { kind: "proposal", id: p.id }],
               }));
             } else if (event.type === "done") {
@@ -234,7 +237,8 @@ export const useConversations = create<ConversationState>()((set, get) => {
         const res = await fetch("/api/agents/proposals", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agentId, kind: p.kind, args: p.args, decision }),
+          // The proposal's own agent (a lead's conversation can hold proposals of its team members).
+          body: JSON.stringify({ agentId: p.agentId, kind: p.kind, args: p.args, decision }),
         });
         const json = (await res.json()) as { ok: boolean; message: string };
         if (!res.ok || !json.ok) throw new Error(json.message || "Failed.");

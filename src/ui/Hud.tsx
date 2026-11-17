@@ -8,6 +8,8 @@ import { useConversations } from "@/ui/conversations/store";
 import { Dispatcher } from "@/ui/dispatch/Dispatcher";
 import { ClickUpHqPanel } from "@/ui/hq/ClickUpHqPanel";
 import { RosterPanel } from "@/ui/roster/RosterPanel";
+import { ActivityPanel } from "@/ui/activity/ActivityPanel";
+import { AgentWizard } from "@/ui/wizard/AgentWizard";
 import { SignOutButton } from "@/ui/SignOutButton";
 import { useUi } from "@/ui/uiStore";
 import { sceneBridge } from "@/world/controls";
@@ -153,6 +155,8 @@ export function Hud({ ownerName }: { ownerName: string }) {
       <div className="pointer-events-auto">
         <ClickUpHqPanel />
         <RosterPanel />
+        <ActivityPanel />
+        <AgentWizard />
       </div>
     </div>
   );

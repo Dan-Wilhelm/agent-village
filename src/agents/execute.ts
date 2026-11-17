@@ -90,6 +90,14 @@ export async function executeProposal(input: { agentId: string; kind: ProposalKi
   if (needed && !agent.permissions.includes(needed as never)) throw new Error("This agent may not do that.");
   const company = registry.companies.find((c) => c.name === agent.company);
 
+  // Strict isolation: ClickUp actions only in the workspace bound to the agent's company.
+  if (input.kind === "comment" || input.kind === "task_change" || input.kind === "draft_task" || input.kind === "mission_control_message") {
+    const a = await getClickUpAccount();
+    if (!company?.clickup_team_id || !a?.teamId || a.teamId !== company.clickup_team_id) {
+      throw new Error(`${agent.company} has no connected work environment — nothing was changed.`);
+    }
+  }
+
   // Rejection only needs cleanup for drafts (they already live in the drafts list).
   if (input.decision === "reject") {
     if (input.kind === "draft_task") {

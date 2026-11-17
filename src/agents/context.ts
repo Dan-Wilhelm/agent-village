@@ -18,6 +18,8 @@ export interface AgentContext {
   keyFields: string[];
   companyDir: string;
   account: ClickUpAccount | null;
+  /** Leads only: the other agents of the team. */
+  teamMembers: Array<{ id: string; name: string; role: string }>;
   /** Stable system prompt (cached) + a small dynamic block (date/time, mode). */
   system: Anthropic.TextBlockParam[];
 }
@@ -49,7 +51,11 @@ async function openInboxItems(companyDir: string, agentId: string) {
   return items;
 }
 
-export async function loadAgentContext(agentId: string, mode: "work" | "training" = "work"): Promise<AgentContext> {
+export async function loadAgentContext(
+  agentId: string,
+  mode: "work" | "training" = "work",
+  opts: { delegatedBy?: { name: string; role: string } } = {},
+): Promise<AgentContext> {
   const registry = await loadRegistry();
   const agent = registry.agents.find((a) => a.id === agentId);
   if (!agent) throw new Error("Unknown agent.");
@@ -66,8 +72,14 @@ export async function loadAgentContext(agentId: string, mode: "work" | "training
     body(`${dir}/Craft.md`),
     body(`${dir}/Context.md`),
     getClickUpAccount(),
-    openInboxItems(companyDir, agent.id),
+    opts.delegatedBy ? Promise.resolve([] as string[]) : openInboxItems(companyDir, agent.id),
   ]);
+  // Strict isolation: a company's agents only get the ClickUp workspace bound to that company.
+  const boundAccount = account && company.clickup_team_id && account.teamId === company.clickup_team_id ? account : null;
+  const teamMembers =
+    agent.kind === "lead"
+      ? registry.agents.filter((a) => a.company === agent.company && a.team === agent.team && a.id !== agent.id).map((a) => ({ id: a.id, name: a.name, role: a.role }))
+      : [];
 
   const languages = agent.language.map((l) => LANG[l]).join(" and ");
   const stable = `You are ${agent.name}, the "${agent.role}" agent working for Dan in the company ${company.name} (team ${agent.team}). Dan talks to you in his private workspace; you are one of several specialised agents.
@@ -86,7 +98,16 @@ ${agent.description}
 When you come to Dan (Europe/Berlin): ${agent.triggers.map(describeTrigger).join("; ")}. Don't promise other visit times — changing them is a setting Dan makes.
 </your_profile>
 
-<your_playbook_craft>
+${
+    agent.kind === "lead"
+      ? `<your_team>
+You lead the team ${agent.team}. Delegate concrete work with ask_team_member and combine the answers for Dan; do simple things yourself.
+${teamMembers.length ? teamMembers.map((m) => `- ${m.id}: ${m.name}, ${m.role}`).join("\n") : "(no members yet — Dan can add them in the agent wizard)"}
+</your_team>
+
+`
+      : ""
+  }<your_playbook_craft>
 ${craft || "(empty — you have not learned transferable rules yet)"}
 </your_playbook_craft>
 
@@ -107,10 +128,14 @@ ${context || "(empty — you have not learned company-specific rules yet)"}
   const now = new Date().toLocaleString("en-GB", { timeZone: "Europe/Berlin", dateStyle: "full", timeStyle: "short" });
   const dynamic =
     `Current date and time (Europe/Berlin): ${now}.` +
-    (!agent.introduced
+    (!boundAccount ? `\nNo work environment is connected for ${company.name} yet: you have no ClickUp access. Say so if Dan asks for real work.` : "") +
+    (opts.delegatedBy
+      ? `\nDELEGATED REQUEST: your team lead ${opts.delegatedBy.name} (${opts.delegatedBy.role}) asks you on Dan's behalf. Do the work and reply with the result only — no introduction, no questions back unless something essential is missing. Proposals you make are shown to Dan for approval as usual.`
+      : "") +
+    (!agent.introduced && !opts.delegatedBy
       ? "\nINTRODUCTION: this is your first conversation with Dan. Briefly introduce yourself (name, role, when you will come by and what you will bring him). Then walk him through the points in your playbook marked “to confirm” — max 3 at a time, as short questions with your assumption, so he can just say yes or correct it. Turn every answer into a playbook rule via propose_playbook_rule (it replaces the assumption). If he asks for real work right away, do it first and continue the introduction afterwards."
       : "") +
-    (inbox.length
+    (inbox.length && !opts.delegatedBy
       ? `\nOPEN “DECIDE LATER” ITEMS from earlier conversations (Dan's words). At a fitting moment (not in the middle of urgent work) ask him briefly what to do with each: learn (propose_playbook_rule), it was a request (do it), or discard. Then call resolve_inbox_item.\n${inbox.join("\n")}`
       : "") +
     (mode === "training"
@@ -124,7 +149,8 @@ ${context || "(empty — you have not learned company-specific rules yet)"}
     missionControlUserId: company.mission_control_user_id ?? null,
     keyFields: company.key_fields ?? DEFAULT_KEY_FIELDS,
     companyDir,
-    account,
+    account: boundAccount,
+    teamMembers,
     system: [
       { type: "text", text: stable, cache_control: { type: "ephemeral" } },
       { type: "text", text: dynamic },

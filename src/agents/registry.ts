@@ -98,3 +98,8 @@ export async function markIntroduced(agentId: string) {
   await writeVaultFile(agent.path, updateFields(file.content, { introduced: true }), `${agent.role}: introduced`, file.sha);
   cache = null;
 }
+
+/** Forget the cached registry (after the wizard changed the vault). */
+export function invalidateRegistry() {
+  cache = null;
+}

@@ -3,14 +3,12 @@
 import { useEffect } from "react";
 import dynamic from "next/dynamic";
 
-import { getRoster } from "@/app/actions/agents";
 import { Hud } from "@/ui/Hud";
 import { LoadingScreen } from "@/ui/LoadingScreen";
 import { registerServiceWorker } from "@/ui/push";
 import { startVisitPolling } from "@/ui/visits";
-import { useRoster } from "@/ui/roster/store";
+import { reloadRoster } from "@/ui/roster/reload";
 
-import { syncAgents } from "./director";
 
 // WebGL + WASM physics only run in the browser.
 const Scene = dynamic(() => import("./Scene"), {
@@ -25,11 +23,9 @@ export function VillageApp({ ownerName }: { ownerName: string }) {
     let cancelled = false;
     let stopPolling: (() => void) | null = null;
     void registerServiceWorker()?.catch(() => null);
-    getRoster()
-      .then((r) => {
+    reloadRoster()
+      .then(() => {
         if (cancelled) return;
-        useRoster.getState().set({ agents: r.agents, teams: r.teams, problems: r.problems });
-        syncAgents(r.agents.map((a) => ({ id: a.id, name: a.name, role: a.role, look: a.look, home: a.home, priority: a.priority })));
         stopPolling = startVisitPolling();
       })
       .catch(() => {

@@ -57,6 +57,8 @@ interface VillageState {
   mode: PlayerMode;
 
   upsertAgent: (agent: AgentView) => void;
+  /** An agent left the village (archived). */
+  removeAgent: (id: string) => void;
   patchAgent: (id: string, patch: Partial<AgentView>) => void;
   enqueue: (interaction: Interaction) => void;
   resolve: (interactionId: string) => Interaction | undefined;
@@ -74,6 +76,12 @@ export const useVillage = create<VillageState>()((set, get) => ({
   mode: "desk",
 
   upsertAgent: (agent) => set((s) => ({ agents: { ...s.agents, [agent.id]: agent } })),
+  removeAgent: (id) =>
+    set((s) => {
+      const { [id]: _gone, ...rest } = s.agents;
+      void _gone;
+      return { agents: rest, queue: s.queue.filter((q) => q.agentId !== id), nearbyAgentId: s.nearbyAgentId === id ? null : s.nearbyAgentId };
+    }),
   patchAgent: (id, patch) =>
     set((s) => (s.agents[id] ? { agents: { ...s.agents, [id]: { ...s.agents[id], ...patch } } } : s)),
   enqueue: (interaction) =>

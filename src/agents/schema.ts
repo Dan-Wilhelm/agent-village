@@ -15,6 +15,10 @@ export const PERMISSIONS = [
   "message_mission_control",
 ] as const;
 
+/** Write actions the owner may allow an agent to do WITHOUT asking (per agent, default none). */
+export const AUTO_APPROVABLE = ["comment", "task_change", "draft_task", "mission_control_message"] as const;
+export type AutoApprovable = (typeof AUTO_APPROVABLE)[number];
+
 const time = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "time must be HH:MM");
 const day = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
 
@@ -47,6 +51,8 @@ export const agentProfileSchema = z.object({
   triggers: z.array(triggerSchema).default([{ type: "on_call" }]),
   permissions: z.array(z.enum(PERMISSIONS)).default(["read_tasks"]),
   introduced: z.boolean().default(false),
+  /** Proposal kinds executed immediately (still validated + logged). Empty = always ask. */
+  auto_approve: z.array(z.enum(AUTO_APPROVABLE)).default([]),
 });
 export type AgentProfile = z.infer<typeof agentProfileSchema>;
 
@@ -60,6 +66,8 @@ export const companySchema = z.object({
   mission_control_user_id: z.coerce.string().regex(/^\d+$/).optional(),
   /** Custom fields shown to agents on every task row (defaults to a sensible set). */
   key_fields: z.array(z.string().min(1).max(60)).max(30).optional(),
+  /** The ClickUp workspace (team id) this company's agents may use. Unset = no access (strict isolation). */
+  clickup_team_id: z.coerce.string().regex(/^\d+$/).optional(),
 });
 export type CompanyProfile = z.infer<typeof companySchema>;
 
