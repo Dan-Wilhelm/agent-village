@@ -159,7 +159,7 @@ function ConversationView({ conversation: c }: { conversation: Conversation }) {
                 </p>
               ) : null;
             case "proposal":
-              return <ProposalCard key={i} proposal={c.proposals[item.id]} />;
+              return <ProposalCard key={i} conversationId={c.agentId} proposal={c.proposals[item.id]} />;
             case "note":
               return (
                 <p key={i} className="text-center text-xs font-bold text-ink/50">
@@ -261,8 +261,9 @@ function RichText({ text, onTask }: { text: string; onTask: (id: string) => void
   );
 }
 
-function ProposalCard({ proposal: p }: { proposal: ProposalView | undefined }) {
+function ProposalCard({ conversationId, proposal: p }: { conversationId: string; proposal: ProposalView | undefined }) {
   const decide = useConversations((s) => s.decide);
+  const from = useVillage((s) => (p && p.agentId !== conversationId ? s.agents[p.agentId]?.name : undefined));
   if (!p) return null;
   const preview =
     p.kind === "comment" || p.kind === "mission_control_message"
@@ -287,15 +288,19 @@ function ProposalCard({ proposal: p }: { proposal: ProposalView | undefined }) {
   }[p.kind];
   return (
     <div className="rounded-2xl border-2 border-wood bg-white px-3 py-2">
-      <p className="text-xs font-black uppercase tracking-wide text-wood">{label}</p>
+      <p className="text-xs font-black uppercase tracking-wide text-wood">
+        {p.auto ? (p.auto.ok ? "Done without asking · " : "Tried without asking · ") : ""}
+        {label}
+        {from && <span className="ml-1 normal-case text-ink/60">· from {from}</span>}
+      </p>
       <p className="mt-0.5 font-bold">{p.summary}</p>
       {preview && <p className="mt-1 whitespace-pre-wrap rounded-lg bg-parchment/50 px-2 py-1 text-xs">{preview}</p>}
       {p.state === "pending" && (
         <div className="mt-2 flex gap-2">
-          <button type="button" onClick={() => void decide(p.agentId, p.id, "approve")} className="cozy-button bg-leaf px-3 py-1 text-xs">
+          <button type="button" onClick={() => void decide(conversationId, p.id, "approve")} className="cozy-button bg-leaf px-3 py-1 text-xs">
             Approve
           </button>
-          <button type="button" onClick={() => void decide(p.agentId, p.id, "reject")} className="cozy-button bg-parchment px-3 py-1 text-xs">
+          <button type="button" onClick={() => void decide(conversationId, p.id, "reject")} className="cozy-button bg-parchment px-3 py-1 text-xs">
             Reject
           </button>
         </div>

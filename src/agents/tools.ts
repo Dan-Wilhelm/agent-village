@@ -31,6 +31,8 @@ export interface Proposal {
   args: Record<string, unknown>;
   /** Short human summary for the panel. */
   summary: string;
+  /** Set when the agent was allowed to do this without asking: what happened. */
+  auto?: { ok: boolean; message: string };
 }
 
 export interface ToolContext {
@@ -43,12 +45,20 @@ export interface ToolContext {
   /** Vault folder of the agent's company, e.g. "Companies/SQVM". */
   companyDir: string;
   proposals: Proposal[];
+  /** Executes a proposal right away (only for kinds in the agent's auto_approve). */
+  autoExecute?: (p: Proposal) => Promise<{ ok: boolean; message: string }>;
+  /** Team leads only: ask a member of the team (runs the member's own turn). */
+  delegate?: (memberId: string, request: string) => Promise<string>;
+  /** Members of the lead's team (id, name, role). */
+  teamMembers?: Array<{ id: string; name: string; role: string }>;
 }
 
 type Permission = AgentProfile["permissions"][number];
 
 interface ToolDef {
   permission: Permission | null; // null = always available
+  /** Only for agents of kind "lead". */
+  leadOnly?: boolean;
   definition: Anthropic.Tool;
   input: z.ZodTypeAny;
   run: (input: never, ctx: ToolContext) => Promise<string>;
@@ -125,9 +135,21 @@ async function liveTask(ctx: ToolContext, taskId: string) {
   return task;
 }
 
-function newProposal(ctx: ToolContext, kind: ProposalKind, args: Record<string, unknown>, summary: string) {
+/** Runs the proposal now if Dan allowed this action type for the agent; returns the tool result text, or null. */
+async function maybeAutoExecute(ctx: ToolContext, p: Proposal): Promise<string | null> {
+  if (!ctx.autoExecute || !(ctx.agent.auto_approve as string[]).includes(p.kind)) return null;
+  const result = await ctx.autoExecute(p).catch((err: unknown) => ({ ok: false, message: err instanceof Error ? err.message : "Failed." }));
+  p.auto = result;
+  return result.ok
+    ? `Done without asking (Dan allowed this action type for you): ${result.message} Tell Dan briefly what you did.`
+    : `You were allowed to do this without asking, but it failed: ${result.message} Nothing was changed. Tell Dan.`;
+}
+
+async function newProposal(ctx: ToolContext, kind: ProposalKind, args: Record<string, unknown>, summary: string) {
   const p: Proposal = { id: `p_${crypto.randomUUID().slice(0, 8)}`, kind, agentId: ctx.agent.id, args, summary };
   ctx.proposals.push(p);
+  const auto = await maybeAutoExecute(ctx, p);
+  if (auto) return auto;
   return `Proposal ${p.id} is now shown to Dan for approval. Nothing has been changed yet. Tell Dan briefly what you proposed and wait for his decision.`;
 }
 
@@ -543,6 +565,11 @@ const TOOLS: Record<string, ToolDef> = {
       const idx = ctx.proposals.findIndex((x) => x.id === proposal.id);
       if (idx >= 0) ctx.proposals[idx] = proposal;
       else ctx.proposals.push(proposal);
+      // A template draft is only executed automatically once it is filled in (no pending template note).
+      if (!note) {
+        const auto = await maybeAutoExecute(ctx, proposal);
+        if (auto) return auto;
+      }
       return `Draft ${draftId} is in Dan's drafts list and shown to him for approval (target: ${target.name}). Nothing in the target list has changed yet.${note}`;
     },
   },
@@ -728,6 +755,33 @@ const TOOLS: Record<string, ToolDef> = {
     },
   },
 
+  ask_team_member: {
+    permission: null,
+    leadOnly: true,
+    definition: {
+      name: "ask_team_member",
+      description:
+        "Team leads only: hand a concrete request to a member of your team. The member works on it with its own tools and permissions and returns its answer; its proposals appear for Dan to approve. Ask several members in parallel when useful, then combine their answers for Dan.",
+      input_schema: {
+        type: "object",
+        properties: {
+          member_id: { type: "string", description: "Agent id of the team member" },
+          request: { type: "string", description: "What exactly you need from them (context included — they don't see this conversation)" },
+        },
+        required: ["member_id", "request"],
+        additionalProperties: false,
+      },
+    },
+    input: z.object({ member_id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,62}$/), request: z.string().min(5).max(4000) }),
+    run: async (input: { member_id: string; request: string }, ctx) => {
+      if (!ctx.delegate || !ctx.teamMembers) throw new Error("Only a team lead can ask team members.");
+      if (!ctx.teamMembers.some((m) => m.id === input.member_id)) {
+        throw new Error(`Not in your team. Members: ${ctx.teamMembers.map((m) => `${m.id} (${m.role})`).join(", ") || "none"}`);
+      }
+      return ctx.delegate(input.member_id, input.request);
+    },
+  },
+
   propose_playbook_rule: {
     permission: null,
     definition: {
@@ -794,14 +848,14 @@ async function docInAllowedSpace(ctx: ToolContext, parent: { id: string; type: n
 /** Tool definitions for an agent, filtered by its permissions (stable order for prompt caching). */
 export function toolsFor(agent: AgentProfile): Anthropic.Tool[] {
   return Object.values(TOOLS)
-    .filter((t) => t.permission === null || agent.permissions.includes(t.permission))
+    .filter((t) => (t.permission === null || agent.permissions.includes(t.permission)) && (!t.leadOnly || agent.kind === "lead"))
     .map((t) => ({ ...t.definition, eager_input_streaming: true }));
 }
 
 /** Runs one tool call. Input is validated against the schema first; errors become is_error results. */
 export async function runTool(name: string, rawInput: unknown, ctx: ToolContext): Promise<{ content: string; isError: boolean }> {
   const tool = TOOLS[name];
-  if (!tool || (tool.permission && !ctx.agent.permissions.includes(tool.permission))) {
+  if (!tool || (tool.permission && !ctx.agent.permissions.includes(tool.permission)) || (tool.leadOnly && ctx.agent.kind !== "lead")) {
     return { content: `Tool ${name} is not available to you.`, isError: true };
   }
   const parsed = tool.input.safeParse(rawInput);

@@ -74,3 +74,14 @@ export async function writeVaultFile(path: string, content: string, message: str
   const json = (await res.json()) as { content: { sha: string } };
   return { sha: json.content.sha };
 }
+
+/** Deletes a file (the vault's git history keeps it recoverable). */
+export async function deleteVaultFile(path: string, message: string, sha: string) {
+  const { repo, branch } = config();
+  const res = await gh(`/repos/${repo}/contents/${encodePath(path)}`, {
+    method: "DELETE",
+    body: JSON.stringify({ message, sha, branch }),
+  });
+  if (res.status === 409 || res.status === 422) throw new VaultError("The note changed in the meantime — please retry.", 409);
+  if (!res.ok && res.status !== 404) throw new VaultError(`Vault delete failed (${res.status})`, res.status);
+}

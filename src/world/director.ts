@@ -33,8 +33,14 @@ let started = false;
 let unsubscribe: (() => void) | null = null;
 const known = new Map<string, DirectorAgent>();
 
-/** Places all agents at home (idempotent: new agents are added, existing ones keep their state). */
+/** Places all agents at home (idempotent: new agents are added, existing ones keep their state, archived ones leave). */
 export function syncAgents(agents: DirectorAgent[]) {
+  const ids = new Set(agents.map((a) => a.id));
+  for (const id of [...known.keys()]) {
+    if (ids.has(id)) continue;
+    known.delete(id);
+    useVillage.getState().removeAgent(id);
+  }
   const perHome = new Map<string, number>();
   for (const a of agents) {
     const n = perHome.get(a.home) ?? 0;

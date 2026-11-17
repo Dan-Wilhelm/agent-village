@@ -64,3 +64,8 @@ body {
     transition: none;
   }
 }
+
+/* Inputs in the agent wizard and small dialogs */
+.wiz-input {
+  @apply w-full rounded-lg border-2 border-parchment bg-white px-2 py-1.5 text-sm text-ink outline-none focus:border-wood disabled:opacity-60;
+}

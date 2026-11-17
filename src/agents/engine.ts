@@ -3,6 +3,7 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 
 import { loadAgentContext } from "./context";
+import { executeProposal } from "./execute";
 import { runTool, toolsFor, type Proposal, type ToolContext } from "./tools";
 
 /**
@@ -26,8 +27,10 @@ export async function runAgentTurn(opts: {
   messages: Anthropic.Beta.BetaMessageParam[];
   mode?: "work" | "training";
   emit: (event: EngineEvent) => void;
+  /** Set when a team lead hands this request to a member (depth 1 only). */
+  delegatedBy?: { name: string; role: string };
 }) {
-  const ctx = await loadAgentContext(opts.agentId, opts.mode);
+  const ctx = await loadAgentContext(opts.agentId, opts.mode, { delegatedBy: opts.delegatedBy });
   const client = new Anthropic();
   const tools = toolsFor(ctx.agent);
   const toolCtx: ToolContext = {
@@ -38,7 +41,30 @@ export async function runAgentTurn(opts: {
     keyFields: ctx.keyFields,
     companyDir: ctx.companyDir,
     proposals: [],
+    // Only proposal kinds Dan allowed for THIS agent run without asking; executeProposal re-validates everything.
+    autoExecute: async (p) => {
+      const r = await executeProposal({ agentId: p.agentId, kind: p.kind, args: p.args, decision: "approve" });
+      return { ok: r.ok, message: r.message };
+    },
   };
+  if (ctx.agent.kind === "lead" && !opts.delegatedBy) {
+    toolCtx.teamMembers = ctx.teamMembers;
+    toolCtx.delegate = async (memberId, request) => {
+      let answer = "";
+      await runAgentTurn({
+        agentId: memberId,
+        messages: [{ role: "user", content: request }],
+        mode: "work",
+        delegatedBy: { name: ctx.agent.name, role: ctx.agent.role },
+        emit: (e) => {
+          if (e.type === "text") answer += e.text;
+          else if (e.type === "proposal") opts.emit(e); // the member's cards show up in the lead's conversation
+          else if (e.type === "error") answer += `\n[${e.message}]`;
+        },
+      });
+      return answer.trim() || "(no answer)";
+    };
+  }
   const isOpus = ctx.agent.model === "claude-opus-5-5";
   const history = [...opts.messages];
   const added: Anthropic.Beta.BetaMessageParam[] = [];

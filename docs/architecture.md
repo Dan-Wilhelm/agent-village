@@ -199,6 +199,17 @@ New agent abilities: `search_tasks` filters by custom field (readable values), t
 
 Approving a draft **moves** it from the drafts list into the target list (v3 move: keeps template checklists/subtasks), sets the status and custom fields and verifies that the fields were stored; if the move fails it falls back to a copy and says so.
 
+### 4.5b Phase 5: agent wizard, teams, isolation (built 2026-11-17)
+
+- **Wizard** (Agents → "+ New agent", or "Settings" on an agent): Describe → Job → Character → Abilities → Visits → Check. "✨ Fill in for me" turns a short (spoken) description into a full proposal via Claude (structured output: role, mission, starting playbook, intro questions, least-privilege permissions, schedule). Everything is editable; saving writes the profile, `Craft.md`, `Context.md` (with *to confirm* questions) and `Changelog.md` to the vault. Edit mode changes settings and mission (role, company and team stay — folders are named by role).
+- **Comes on its own or only when called** is an explicit question; on its own = schedule and/or before calendar events.
+- **"Without asking"** (`auto_approve` per agent; comment, task change, draft, Mission Control DM): such proposals are executed immediately, still fully re-validated (permission, allowed spaces, discretion, company binding) and logged; the card shows "Done without asking". Default: nothing. Copied agents never keep it.
+- **Activity log** panel (Agents → Activity): every agent action and settings change, without content.
+- **Teams & leads:** new teams in the wizard; an agent of kind *lead* becomes the team's lead and gets `ask_team_member` — it hands concrete requests to members (depth 1), whose proposals appear in the lead's conversation.
+- **Copy team** to another (new) company: team note + each agent's profile and **craft**; context, introduction and auto-approve start fresh.
+- **Strict company isolation:** a company note's `clickup_team_id` binds it to one ClickUp workspace. Agents of a company without (or with another) binding get no ClickUp access — enforced when loading tools and again when executing approvals.
+- **Archive:** moves an agent's folder to `Companies/<C>/Archive/<Role> (<date>)/` (out of the village, kept in the vault and its git history).
+
 ### 4.5 The Dispatcher: one input, the right agent comes running
 
 A central feature: I don't need to know which agent to call.
@@ -363,7 +374,7 @@ agent-village/
 | 2 | ClickUp adapter, encrypted token storage, cache + webhook sync, task overview in ClickUp HQ |
 | 3 | Agent engine: Workflow runs, introduction, training mode, feedback loop, approvals, activity log, push, voice input |
 | 4 | Dispatcher + MVP agents: Daily Team Briefing, Client Review Tracker, Internal Review Reminder, Landing Page / Static Ad Brief / Video task agents, Meeting Prep ← **done 2026-11-16** (see 4.5a) |
-| 5 | Agent creation wizard |
+| 5 | Agent creation wizard ← **done 2026-11-17** (see 4.5b) |
 | 6 | Security review, README, self-hosting setup |
 
 ---
