@@ -9,6 +9,7 @@ import { useVillage } from "@/world/store";
 
 import { toolLabel, useConversations, type Conversation, type ProposalView } from "./store";
 import { safeColor } from "@/ui/safe-color";
+import { VoiceStatus } from "@/ui/VoiceStatus";
 
 /** Right-hand dock with all open conversations (several can stay open in parallel). */
 export function ConversationDock() {
@@ -228,6 +229,7 @@ function ConversationView({ conversation: c }: { conversation: Conversation }) {
           Send
         </button>
       </form>
+      <VoiceStatus listening={voice.listening} interim={voice.interim} error={voice.error} className="px-3 pb-2" />
 
       {finishing && <FinishDialog conversation={c} onCancel={() => setFinishing(false)} />}
       {peek && <TaskPeek taskId={peek} onClose={() => setPeek(null)} />}

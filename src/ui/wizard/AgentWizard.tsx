@@ -14,6 +14,7 @@ import { useConversations } from "@/ui/conversations/store";
 import { reloadRoster } from "@/ui/roster/reload";
 import { useUi } from "@/ui/uiStore";
 import { useVoiceInput } from "@/ui/voice";
+import { VoiceStatus } from "@/ui/VoiceStatus";
 
 /**
  * Agent wizard: create a new agent (or change an existing one). Asks for the
@@ -402,6 +403,7 @@ function WizardDialog({ wizard, onClose }: { wizard: { mode: "create" } | { mode
                       </button>
                     )}
                   </div>
+                  <VoiceStatus listening={voice.listening} interim={voice.interim} error={voice.error} />
                   <div className="flex flex-wrap gap-2">
                     <button type="button" disabled={pending || description.trim().length < 10} onClick={suggest} className="cozy-button bg-leaf px-4 py-2 disabled:opacity-50">
                       {pending ? "Claude is drafting…" : "✨ Fill in for me"}

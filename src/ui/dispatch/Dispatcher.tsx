@@ -6,6 +6,7 @@ import { dispatchRequest } from "@/app/actions/agents";
 import { useConversations } from "@/ui/conversations/store";
 import { useRoster } from "@/ui/roster/store";
 import { useVoiceInput } from "@/ui/voice";
+import { VoiceStatus } from "@/ui/VoiceStatus";
 
 type Candidate = { agentId: string; confidence: number; reason: string };
 
@@ -103,6 +104,7 @@ export function Dispatcher() {
         </button>
       </form>
       {error && <p className="mt-1 text-center text-xs font-bold text-berry">{error}</p>}
+      <VoiceStatus listening={voice.listening} interim={voice.interim} error={voice.error} className="mt-1 rounded-lg bg-cream/90 px-2 py-1 text-center" />
     </div>
   );
 }
