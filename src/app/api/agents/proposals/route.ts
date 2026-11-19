@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { executeProposal } from "@/agents/execute";
 import { requireOwnerForRoute } from "@/lib/auth/owner";
+import { rateLimitResponse } from "@/lib/rate-limit";
 
 const bodySchema = z.object({
   agentId: z.string().regex(/^[a-z0-9][a-z0-9-]{1,62}$/),
@@ -14,6 +15,8 @@ const bodySchema = z.object({
 export async function POST(request: Request) {
   const owner = await requireOwnerForRoute();
   if (!owner.ok) return owner.response;
+  const limited = await rateLimitResponse("proposal");
+  if (limited) return limited;
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ ok: false, message: "Invalid request." }, { status: 400 });
   try {

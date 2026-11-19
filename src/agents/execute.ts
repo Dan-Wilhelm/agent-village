@@ -43,7 +43,7 @@ const schemas = {
   meeting_notes: z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     title: z.string().min(2).max(80).regex(/^[^/\\:*?"<>|#^[\]]+$/),
-    client_code: z.string().max(20).optional(),
+    client_code: z.string().regex(/^[A-Za-z0-9_-]{1,20}$/).optional(),
     summary: z.string().max(3000).optional(),
     notes: z.string().min(10).max(60_000),
     company_dir: z.string(),
@@ -102,7 +102,12 @@ export async function executeProposal(input: { agentId: string; kind: ProposalKi
   if (input.decision === "reject") {
     if (input.kind === "draft_task") {
       const args = schemas.draft_task.parse(input.args);
-      const { a } = await assertTaskAllowed(args.draft_task_id);
+      const { a, task } = await assertTaskAllowed(args.draft_task_id);
+      // Only ever delete a task that still sits in the drafts list.
+      const list = await clientFor(a).getList(task.list.id);
+      if (!sameListName(list.name, company?.drafts_list ?? "Drafts – pending approval")) {
+        throw new Error("This task is no longer in the drafts list — nothing was deleted.");
+      }
       await clientFor(a).deleteTask(args.draft_task_id);
     }
     await logActivity(`agent:${agent.id}`, `proposal.rejected.${input.kind}`);
@@ -240,8 +245,8 @@ export async function executeProposal(input: { agentId: string; kind: ProposalKi
           const existing = await readVaultFile(`${dir}/${f}`);
           if (!existing) continue;
           const lines = existing.content.split("\n");
-          // Only the FIRST line that contains the text (markdown stars ignored) is removed.
-          const idx = lines.findIndex((l) => l.replace(/\*/g, "").includes(target));
+          // Only the FIRST "to confirm" line that contains the text is removed — never other rules.
+          const idx = lines.findIndex((l) => /\*to confirm:\*/.test(l) && l.replace(/\*/g, "").includes(target));
           if (idx >= 0) {
             lines.splice(idx, 1);
             await writeVaultFile(`${dir}/${f}`, lines.join("\n"), `${agent.role}: assumption confirmed`, existing.sha);

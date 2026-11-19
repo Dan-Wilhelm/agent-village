@@ -47,8 +47,16 @@ export interface ToolContext {
   proposals: Proposal[];
   /** Executes a proposal right away (only for kinds in the agent's auto_approve). */
   autoExecute?: (p: Proposal) => Promise<{ ok: boolean; message: string }>;
+  /**
+   * Set once the conversation contains content written by others (tasks, comments,
+   * calendar, docs, replies). From then on nothing runs "without asking": such text
+   * could carry injected instructions.
+   */
+  tainted?: boolean;
   /** Team leads only: ask a member of the team (runs the member's own turn). */
   delegate?: (memberId: string, request: string) => Promise<string>;
+  /** How many team requests this turn made (capped). */
+  delegations?: number;
   /** Members of the lead's team (id, name, role). */
   teamMembers?: Array<{ id: string; name: string; role: string }>;
 }
@@ -57,6 +65,8 @@ type Permission = AgentProfile["permissions"][number];
 
 interface ToolDef {
   permission: Permission | null; // null = always available
+  /** Returns text written by others (prompt-injection risk): disables "without asking" for the rest of the conversation. */
+  readsUntrusted?: boolean;
   /** Only for agents of kind "lead". */
   leadOnly?: boolean;
   definition: Anthropic.Tool;
@@ -138,6 +148,7 @@ async function liveTask(ctx: ToolContext, taskId: string) {
 /** Runs the proposal now if Dan allowed this action type for the agent; returns the tool result text, or null. */
 async function maybeAutoExecute(ctx: ToolContext, p: Proposal): Promise<string | null> {
   if (!ctx.autoExecute || !(ctx.agent.auto_approve as string[]).includes(p.kind)) return null;
+  if (ctx.tainted) return null; // content from others was read: Dan approves this one himself
   const result = await ctx.autoExecute(p).catch((err: unknown) => ({ ok: false, message: err instanceof Error ? err.message : "Failed." }));
   p.auto = result;
   return result.ok
@@ -155,6 +166,7 @@ async function newProposal(ctx: ToolContext, kind: ProposalKind, args: Record<st
 
 const TOOLS: Record<string, ToolDef> = {
   search_tasks: {
+    readsUntrusted: true,
     permission: "read_tasks",
     definition: {
       name: "search_tasks",
@@ -242,6 +254,7 @@ const TOOLS: Record<string, ToolDef> = {
           includeClosed: input.include_closed,
         });
         for (const t of res.tasks) {
+          if (!account.selectedSpaceIds.includes(t.space.id)) continue; // never trust the API filter alone
           if (!input.include_closed && !isOpenTask(t)) continue;
           if (q && !t.name.toLowerCase().includes(q)) continue;
           if (tagSet && !(t.tags ?? []).some((g) => tagSet.includes(g.name.toLowerCase()))) continue;
@@ -303,6 +316,7 @@ const TOOLS: Record<string, ToolDef> = {
   },
 
   get_task: {
+    readsUntrusted: true,
     permission: "read_tasks",
     definition: {
       name: "get_task",
@@ -336,6 +350,7 @@ const TOOLS: Record<string, ToolDef> = {
   },
 
   get_calendar: {
+    readsUntrusted: true,
     permission: "read_calendar",
     definition: {
       name: "get_calendar",
@@ -351,6 +366,7 @@ const TOOLS: Record<string, ToolDef> = {
   },
 
   read_mission_control_replies: {
+    readsUntrusted: true,
     permission: "message_mission_control",
     definition: {
       name: "read_mission_control_replies",
@@ -617,6 +633,7 @@ const TOOLS: Record<string, ToolDef> = {
   },
 
   find_docs: {
+    readsUntrusted: true,
     permission: "read_meeting_notes",
     definition: {
       name: "find_docs",
@@ -652,6 +669,7 @@ const TOOLS: Record<string, ToolDef> = {
   },
 
   read_doc: {
+    readsUntrusted: true,
     permission: "read_meeting_notes",
     definition: {
       name: "read_doc",
@@ -687,6 +705,7 @@ const TOOLS: Record<string, ToolDef> = {
   },
 
   find_meeting_notes: {
+    readsUntrusted: true,
     permission: "read_meeting_notes",
     definition: {
       name: "find_meeting_notes",
@@ -735,7 +754,7 @@ const TOOLS: Record<string, ToolDef> = {
     input: z.object({
       date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       title: z.string().min(2).max(80).regex(/^[^/\\:*?"<>|#^[\]]+$/, "no special characters in the title"),
-      client_code: z.string().max(20).optional(),
+      client_code: z.string().regex(/^[A-Za-z0-9_-]{1,20}$/).optional(),
       summary: z.string().max(3000).optional(),
       notes: z.string().min(10).max(60_000),
     }),
@@ -777,6 +796,7 @@ const TOOLS: Record<string, ToolDef> = {
   },
 
   ask_team_member: {
+    readsUntrusted: true,
     permission: null,
     leadOnly: true,
     definition: {
@@ -796,6 +816,8 @@ const TOOLS: Record<string, ToolDef> = {
     input: z.object({ member_id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,62}$/), request: z.string().min(5).max(4000) }),
     run: async (input: { member_id: string; request: string }, ctx) => {
       if (!ctx.delegate || !ctx.teamMembers) throw new Error("Only a team lead can ask team members.");
+      ctx.delegations = (ctx.delegations ?? 0) + 1;
+      if (ctx.delegations > 6) throw new Error("You already asked your team 6 times in this answer — combine what you have for Dan.");
       if (!ctx.teamMembers.some((m) => m.id === input.member_id)) {
         throw new Error(`Not in your team. Members: ${ctx.teamMembers.map((m) => `${m.id} (${m.role})`).join(", ") || "none"}`);
       }
@@ -866,6 +888,9 @@ async function docInAllowedSpace(ctx: ToolContext, parent: { id: string; type: n
   return false;
 }
 
+/** Names of tools whose results contain text written by others. */
+export const UNTRUSTED_TOOL_NAMES = new Set(Object.entries(TOOLS).filter(([, t]) => t.readsUntrusted).map(([n]) => n));
+
 /** Tool definitions for an agent, filtered by its permissions (stable order for prompt caching). */
 export function toolsFor(agent: AgentProfile): Anthropic.Tool[] {
   return Object.values(TOOLS)
@@ -884,7 +909,9 @@ export async function runTool(name: string, rawInput: unknown, ctx: ToolContext)
     return { content: JSON.stringify({ INVALID_INPUT: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }), isError: true };
   }
   try {
-    return { content: await tool.run(parsed.data as never, ctx), isError: false };
+    const content = await tool.run(parsed.data as never, ctx);
+    if (tool.readsUntrusted) ctx.tainted = true;
+    return { content, isError: false };
   } catch (err) {
     return { content: err instanceof Error ? err.message : "Tool failed.", isError: true };
   }

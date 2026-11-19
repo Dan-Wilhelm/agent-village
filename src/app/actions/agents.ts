@@ -8,6 +8,7 @@ import { loadRegistry, markIntroduced, renameAgent } from "@/agents/registry";
 import { readVaultFile, writeVaultFile } from "@/integrations/vault/github";
 import { logActivity } from "@/lib/activity";
 import { requireOwnerAction } from "@/lib/auth/require-owner";
+import { hitRateLimit, RateLimitError } from "@/lib/rate-limit";
 
 export interface RosterAgent {
   id: string;
@@ -63,8 +64,10 @@ export async function renameAgentAction(agentId: string, newName: string) {
 export async function dispatchRequest(text: string) {
   await requireOwnerAction();
   try {
+    await hitRateLimit("dispatch");
     return { ok: true as const, candidates: await dispatch(String(text)) };
-  } catch {
+  } catch (err) {
+    if (err instanceof RateLimitError) return { ok: false as const, candidates: [], message: err.message };
     return { ok: false as const, candidates: [], message: "Could not find the right agent right now." };
   }
 }

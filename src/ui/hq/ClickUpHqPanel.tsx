@@ -7,6 +7,7 @@ import { getHqMeta, getHqTaskDetail, type HqMeta, type HqTask, type HqTaskDetail
 import { useUi } from "@/ui/uiStore";
 
 import { dueBucket, formatDue, type DueBucket } from "./buckets";
+import { safeColor } from "@/ui/safe-color";
 
 type View = "focus" | "overdue" | "today" | "week" | "all";
 
@@ -379,7 +380,7 @@ function StatusPill({ status, color }: { status: string; color: string | null })
   return (
     <span
       className="shrink-0 rounded-md px-2 py-0.5 text-[11px] font-black uppercase text-white"
-      style={{ background: color ?? "#999" }}
+      style={{ background: safeColor(color, "#999") }}
     >
       {status}
     </span>
@@ -395,7 +396,7 @@ function Assignees({ people }: { people: HqTask["assignees"] }) {
           key={p.id}
           title={p.username}
           className="inline-flex h-6 w-6 items-center justify-center rounded-full border-2 border-cream text-[10px] font-black text-white"
-          style={{ background: p.color ?? "#8b5e3c" }}
+          style={{ background: safeColor(p.color, "#8b5e3c") }}
         >
           {p.initials ?? p.username.slice(0, 2).toUpperCase()}
         </span>

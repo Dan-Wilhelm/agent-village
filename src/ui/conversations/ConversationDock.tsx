@@ -8,6 +8,7 @@ import { useVoiceInput } from "@/ui/voice";
 import { useVillage } from "@/world/store";
 
 import { toolLabel, useConversations, type Conversation, type ProposalView } from "./store";
+import { safeColor } from "@/ui/safe-color";
 
 /** Right-hand dock with all open conversations (several can stay open in parallel). */
 export function ConversationDock() {
@@ -269,7 +270,7 @@ function ProposalCard({ conversationId, proposal: p }: { conversationId: string;
     p.kind === "comment" || p.kind === "mission_control_message"
       ? String(p.args.text ?? "")
       : p.kind === "playbook_rule"
-        ? `${String(p.args.rule ?? "")}\nTest: ${String(p.args.test_case ?? "")}`
+        ? `${String(p.args.rule ?? "")}\nTest: ${String(p.args.test_case ?? "")}${p.args.replaces ? `\nReplaces the open question: ${String(p.args.replaces)}` : ""}`
         : p.kind === "meeting_notes"
           ? String(p.args.summary ?? String(p.args.notes ?? "").slice(0, 400))
           : p.kind === "draft_task" && (p.args.fields || p.args.status)
@@ -394,7 +395,7 @@ function TaskPeek({ taskId, onClose }: { taskId: string; onClose: () => void }) 
               </button>
             </div>
             <p className="mt-1 text-xs">
-              <span className="rounded px-1.5 py-0.5 font-black uppercase text-white" style={{ background: detail.statusColor ?? "#999" }}>
+              <span className="rounded px-1.5 py-0.5 font-black uppercase text-white" style={{ background: safeColor(detail.statusColor, "#999") }}>
                 {detail.status}
               </span>
               {detail.dueAt && <span className="ml-2 font-bold">due {new Date(detail.dueAt).toLocaleDateString()}</span>}

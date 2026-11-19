@@ -11,6 +11,7 @@ import { getDb } from "@/db";
 import { activityLog } from "@/db/schema";
 import { getClickUpAccount } from "@/integrations/clickup/account";
 import { requireOwnerAction } from "@/lib/auth/require-owner";
+import { hitRateLimit } from "@/lib/rate-limit";
 
 /** Owner-only actions behind the agent wizard, teams and the activity log. */
 
@@ -67,6 +68,7 @@ export async function getAgentForEdit(agentId: string): Promise<Result<{ input: 
 export async function suggestAgentAction(description: string, companyId: string) {
   await requireOwnerAction();
   try {
+    await hitRateLimit("suggestAgent");
     return { ok: true as const, suggestion: await suggestAgent(String(description), String(companyId)) };
   } catch (err) {
     return fail(err, "No suggestion right now.");
@@ -78,6 +80,7 @@ export async function createAgentAction(raw: unknown): Promise<Result<{ agentId:
   const parsed = agentInputSchema.safeParse(raw);
   if (!parsed.success) return { ok: false, message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") };
   try {
+    await hitRateLimit("authoring");
     const r = await createAgent(parsed.data);
     revalidatePath("/");
     return { ok: true, agentId: r.agentId };
@@ -91,6 +94,7 @@ export async function updateAgentAction(agentId: string, raw: unknown): Promise<
   const parsed = agentInputSchema.safeParse(raw);
   if (!parsed.success) return { ok: false, message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") };
   try {
+    await hitRateLimit("authoring");
     const r = await updateAgent(String(agentId), parsed.data);
     revalidatePath("/");
     return { ok: true, agentId: r.agentId };
@@ -102,6 +106,7 @@ export async function updateAgentAction(agentId: string, raw: unknown): Promise<
 export async function archiveAgentAction(agentId: string): Promise<Result<{ archivedTo: string }>> {
   await requireOwnerAction();
   try {
+    await hitRateLimit("authoring");
     const r = await archiveAgent(String(agentId));
     revalidatePath("/");
     return { ok: true, archivedTo: r.archivedTo };
@@ -113,6 +118,7 @@ export async function archiveAgentAction(agentId: string): Promise<Result<{ arch
 export async function createCompanyAction(name: string): Promise<Result<{ companyId: string; name: string }>> {
   await requireOwnerAction();
   try {
+    await hitRateLimit("authoring");
     return { ok: true, ...(await createCompany(String(name))) };
   } catch (err) {
     return fail(err, "Could not create the company.");
@@ -122,6 +128,7 @@ export async function createCompanyAction(name: string): Promise<Result<{ compan
 export async function createTeamAction(companyId: string, name: string, mission: string): Promise<Result<{ team: string }>> {
   await requireOwnerAction();
   try {
+    await hitRateLimit("authoring");
     return { ok: true, ...(await createTeam(String(companyId), String(name), String(mission ?? ""))) };
   } catch (err) {
     return fail(err, "Could not create the team.");
@@ -131,6 +138,7 @@ export async function createTeamAction(companyId: string, name: string, mission:
 export async function copyTeamAction(teamId: string, targetCompanyId: string): Promise<Result<{ copied: string[] }>> {
   await requireOwnerAction();
   try {
+    await hitRateLimit("authoring");
     const r = await copyTeam(String(teamId), String(targetCompanyId));
     revalidatePath("/");
     return { ok: true, copied: r.copied };
@@ -142,6 +150,7 @@ export async function copyTeamAction(teamId: string, targetCompanyId: string): P
 /** The newest entries of the activity log (no secrets or content are ever logged). */
 export async function getActivity(limit = 100) {
   await requireOwnerAction();
+  await hitRateLimit("readHeavy");
   const rows = await getDb()
     .select()
     .from(activityLog)

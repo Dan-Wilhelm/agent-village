@@ -1,6 +1,7 @@
 import {
   bigserial,
   index,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -89,4 +90,11 @@ export const pushSubscriptions = pgTable("push_subscriptions", {
   p256dh: text("p256dh").notNull(),
   auth: text("auth").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Fixed-window request counters for app-level rate limits (no content, only a bucket name). */
+export const appRateLimits = pgTable("app_rate_limits", {
+  key: text("key").primaryKey(),
+  windowStart: timestamp("window_start", { withTimezone: true }).notNull().defaultNow(),
+  count: integer("count").notNull().default(0),
 });

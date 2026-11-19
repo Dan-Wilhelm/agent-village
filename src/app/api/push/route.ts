@@ -6,11 +6,26 @@ import { pushSubscriptions } from "@/db/schema";
 import { logActivity } from "@/lib/activity";
 import { requireOwnerForRoute } from "@/lib/auth/owner";
 import { pushToOwner } from "@/lib/push/send";
+import { rateLimitResponse } from "@/lib/rate-limit";
 
 const subscribeSchema = z.object({
   action: z.literal("subscribe"),
   subscription: z.object({
-    endpoint: z.string().url().startsWith("https://").max(2000),
+    endpoint: z
+      .string()
+      .url()
+      .max(2000)
+      .refine((u) => {
+        // Only the browsers' real push services (the server POSTs to this URL).
+        const host = new URL(u).hostname;
+        return (
+          u.startsWith("https://") &&
+          (host === "fcm.googleapis.com" ||
+            host === "updates.push.services.mozilla.com" ||
+            host.endsWith(".push.apple.com") ||
+            host.endsWith(".notify.windows.com"))
+        );
+      }, "unsupported push service"),
     keys: z.object({ p256dh: z.string().min(10).max(200), auth: z.string().min(8).max(100) }),
   }),
 });
@@ -24,6 +39,8 @@ export async function POST(request: Request) {
   if (!owner.ok) return owner.response;
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ ok: false, message: "Invalid request." }, { status: 400 });
+  const limited = await rateLimitResponse(parsed.data.action === "test" ? "pushTest" : "readHeavy");
+  if (limited) return limited;
   const db = getDb();
   const body = parsed.data;
 

@@ -21,9 +21,25 @@ const PUBLIC = [
   /^\/manifest\.webmanifest$/,
 ];
 
+/**
+ * CSRF defence for cookie-authenticated API writes: the request must come from
+ * this site (Fetch Metadata, falling back to the Origin header). Server actions
+ * get the same check from Next.js itself.
+ */
+function isCrossSiteWrite(request: NextRequest) {
+  if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return false;
+  const site = request.headers.get("sec-fetch-site");
+  if (site) return site !== "same-origin" && site !== "none";
+  const origin = request.headers.get("origin");
+  return origin !== null && origin !== request.nextUrl.origin;
+}
+
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   if (PUBLIC.some((re) => re.test(pathname))) return NextResponse.next();
+  if (pathname.startsWith("/api/") && isCrossSiteWrite(request)) {
+    return NextResponse.json({ error: "cross-site request blocked" }, { status: 403 });
+  }
   if (getSessionCookie(request)) return NextResponse.next();
   if (pathname.startsWith("/api/")) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   return NextResponse.redirect(new URL("/sign-in", request.url));

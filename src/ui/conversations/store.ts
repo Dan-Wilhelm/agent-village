@@ -172,7 +172,11 @@ export const useConversations = create<ConversationState>()((set, get) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ mode: get().conversations[agentId]?.mode ?? "work", messages: get().conversations[agentId]?.history ?? [] }),
         });
-        if (!res.ok || !res.body) throw new Error(res.status === 401 ? "Please sign in again." : "The agent is not reachable.");
+        if (!res.ok || !res.body) {
+          throw new Error(
+            res.status === 401 ? "Please sign in again." : res.status === 429 ? "Too many requests — please wait a moment." : "The agent is not reachable.",
+          );
+        }
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";

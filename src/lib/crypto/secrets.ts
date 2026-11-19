@@ -35,9 +35,11 @@ export function decryptSecret(payload: string, context: string, rawKey = process
   const parts = payload.split(".");
   if (parts.length !== 4 || parts[0] !== VERSION) throw new Error("Unsupported secret format");
   const [, ivB64, tagB64, ctB64] = parts;
-  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivB64, "base64url"));
+  const tag = Buffer.from(tagB64, "base64url");
+  if (tag.length !== 16) throw new Error("Invalid secret");
+  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivB64, "base64url"), { authTagLength: 16 });
   decipher.setAAD(Buffer.from(context, "utf8"));
-  decipher.setAuthTag(Buffer.from(tagB64, "base64url"));
+  decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(Buffer.from(ctB64, "base64url")), decipher.final()]).toString("utf8");
 }
 

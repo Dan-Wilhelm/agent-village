@@ -2,6 +2,7 @@ import { requireOwnerForRoute } from "@/lib/auth/owner";
 import { ClickUpError } from "@/integrations/clickup/client";
 import { fetchTaskPages, getClickUpAccount, MAX_TASK_PAGES } from "@/integrations/clickup/account";
 import { hierarchyFromTasks, toHqTask } from "@/integrations/clickup/mapping";
+import { rateLimitResponse } from "@/lib/rate-limit";
 
 /**
  * GET /api/hq/tasks?start=0&count=6 — one slice of open tasks for ClickUp HQ,
@@ -11,6 +12,8 @@ import { hierarchyFromTasks, toHqTask } from "@/integrations/clickup/mapping";
 export async function GET(request: Request) {
   const owner = await requireOwnerForRoute();
   if (!owner.ok) return owner.response;
+  const limited = await rateLimitResponse("readHeavy");
+  if (limited) return limited;
 
   const url = new URL(request.url);
   const start = Number(url.searchParams.get("start") ?? "0");

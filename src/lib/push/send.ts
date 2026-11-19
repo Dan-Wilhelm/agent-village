@@ -15,8 +15,9 @@ function configure() {
   if (configured) return true;
   const pub = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
   const priv = process.env.VAPID_PRIVATE_KEY;
-  if (!pub || !priv) return false;
-  webpush.setVapidDetails(process.env.VAPID_SUBJECT || "https://village.medawi.de", pub, priv);
+  const subject = process.env.VAPID_SUBJECT;
+  if (!pub || !priv || !subject) return false;
+  webpush.setVapidDetails(subject, pub, priv);
   configured = true;
   return true;
 }

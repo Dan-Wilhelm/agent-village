@@ -3,8 +3,10 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 
 import { loadAgentContext } from "./context";
+import { signTurnNote } from "@/lib/turn-note-sig";
+
 import { executeProposal } from "./execute";
-import { runTool, toolsFor, type Proposal, type ToolContext } from "./tools";
+import { runTool, toolsFor, UNTRUSTED_TOOL_NAMES, type Proposal, type ToolContext } from "./tools";
 
 /**
  * One conversation turn with an agent. STATELESS: the browser holds the
@@ -43,10 +45,17 @@ export async function runAgentTurn(opts: {
     companyDir: ctx.companyDir,
     proposals: [],
     // Only proposal kinds Dan allowed for THIS agent run without asking; executeProposal re-validates everything.
-    autoExecute: async (p) => {
-      const r = await executeProposal({ agentId: p.agentId, kind: p.kind, args: p.args, decision: "approve" });
-      return { ok: r.ok, message: r.message };
-    },
+    // Never in delegated turns (the request came from another agent, not from Dan).
+    autoExecute: opts.delegatedBy
+      ? undefined
+      : async (p) => {
+          const r = await executeProposal({ agentId: p.agentId, kind: p.kind, args: p.args, decision: "approve" });
+          return { ok: r.ok, message: r.message };
+        },
+    // Earlier turns already read content written by others → nothing runs without asking.
+    tainted: opts.messages.some(
+      (m) => m.role === "assistant" && Array.isArray(m.content) && m.content.some((b) => b.type === "tool_use" && UNTRUSTED_TOOL_NAMES.has(b.name)),
+    ),
   };
   if (ctx.agent.kind === "lead" && !opts.delegatedBy) {
     toolCtx.teamMembers = ctx.teamMembers;
@@ -74,7 +83,8 @@ export async function runAgentTurn(opts: {
   if (history.at(-1)?.role === "user") {
     const note: Anthropic.Beta.BetaMessageParam = { role: "system", content: ctx.turnNote };
     history.push(note);
-    added.push(note);
+    // The browser's copy carries a signature; only signed notes are accepted back (see the turn route).
+    added.push({ ...note, _sig: signTurnNote(ctx.turnNote) } as Anthropic.Beta.BetaMessageParam);
   }
   // Emit new proposals and changed ones (a revised draft keeps its id and replaces its card).
   const emitted = new Map<string, string>();
