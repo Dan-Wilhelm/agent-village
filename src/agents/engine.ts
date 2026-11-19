@@ -30,7 +30,8 @@ export async function runAgentTurn(opts: {
   /** Set when a team lead hands this request to a member (depth 1 only). */
   delegatedBy?: { name: string; role: string };
 }) {
-  const ctx = await loadAgentContext(opts.agentId, opts.mode, { delegatedBy: opts.delegatedBy });
+  const firstTurn = !opts.messages.some((m) => m.role === "assistant");
+  const ctx = await loadAgentContext(opts.agentId, opts.mode, { delegatedBy: opts.delegatedBy, firstTurn });
   const client = new Anthropic();
   const tools = toolsFor(ctx.agent);
   const toolCtx: ToolContext = {
@@ -68,6 +69,13 @@ export async function runAgentTurn(opts: {
   const isOpus = ctx.agent.model === "claude-opus-5-5";
   const history = [...opts.messages];
   const added: Anthropic.Beta.BetaMessageParam[] = [];
+  // Append-only: per-turn facts go in as a role:"system" message right after Dan's message.
+  // The browser keeps it (it is part of `added`), so later turns replay it unchanged.
+  if (history.at(-1)?.role === "user") {
+    const note: Anthropic.Beta.BetaMessageParam = { role: "system", content: ctx.turnNote };
+    history.push(note);
+    added.push(note);
+  }
   // Emit new proposals and changed ones (a revised draft keeps its id and replaces its card).
   const emitted = new Map<string, string>();
 
@@ -80,8 +88,12 @@ export async function runAgentTurn(opts: {
       messages: history,
       cache_control: { type: "ephemeral" },
       output_config: { effort: EFFORT[ctx.agent.kind] },
+      // Safety net: if the frozen prompt still changed (e.g. a rule was learned mid-conversation),
+      // drop the outdated reasoning instead of failing the turn. Drops are logged below.
+      thinking: { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } },
       // Opus: a declined request is retried server-side on a fallback model instead of failing.
-      ...(isOpus ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
+      betas: isOpus ? ["thinking-binding-controls-2026-08-01", "server-side-fallback-2026-07-01"] : ["thinking-binding-controls-2026-08-01"],
+      ...(isOpus ? { fallbacks: "default" as const } : {}),
     });
     stream.on("text", (delta) => opts.emit({ type: "text", text: delta }));
 
@@ -95,6 +107,13 @@ export async function runAgentTurn(opts: {
       throw err;
     }
 
+    if (message.input_transformations?.length) {
+      // Monitoring only (no content): which earlier reasoning blocks were dropped and why.
+      console.warn("thinking blocks dropped", {
+        agentId: ctx.agent.id,
+        entries: message.input_transformations.map((t) => ({ type: t.type, reason: "reason" in t ? t.reason : undefined, path: "path" in t ? t.path : undefined })),
+      });
+    }
     const assistant: Anthropic.Beta.BetaMessageParam = { role: "assistant", content: message.content };
     history.push(assistant);
     added.push(assistant);
