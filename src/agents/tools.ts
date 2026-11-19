@@ -182,6 +182,10 @@ const TOOLS: Record<string, ToolDef> = {
             description: "Add each task's newest comment (who, when, text) — use it to see what was last done. Max 40 tasks.",
           },
           limit: { type: "integer", description: "Max rows (default 30, max 80)" },
+          count_only: {
+            type: "boolean",
+            description: "Return exact COUNTS instead of rows (all pages, up to 3000 tasks), grouped by list, status and Client Code. Use this for 'how many …' questions.",
+          },
         },
         additionalProperties: false,
       },
@@ -199,6 +203,7 @@ const TOOLS: Record<string, ToolDef> = {
       include_closed: z.boolean().optional(),
       with_last_comment: z.boolean().optional(),
       limit: z.number().int().min(1).max(80).optional(),
+      count_only: z.boolean().optional(),
     }),
     run: async (input: {
       statuses?: string[];
@@ -213,15 +218,17 @@ const TOOLS: Record<string, ToolDef> = {
       include_closed?: boolean;
       with_last_comment?: boolean;
       limit?: number;
+      count_only?: boolean;
     }, ctx) => {
       const account = requireAccount(ctx);
       const client = clientFor(account);
-      const limit = input.limit ?? 30;
+      const limit = input.count_only ? 3000 : (input.limit ?? 30);
       const q = input.query?.toLowerCase();
       const tagSet = input.tags?.map((t) => t.toLowerCase());
       const matched: Array<Parameters<typeof compactTask>[0]> = [];
       // Client-side filters (fields/tags/name) may need more pages.
-      const maxPages = input.field_equals || tagSet || q ? 10 : 5;
+      const maxPages = input.count_only ? 30 : input.field_equals || tagSet || q ? 10 : 5;
+      let capped = false;
       for (let page = 0; page < maxPages && matched.length < limit; page++) {
         const res = await client.getTeamTasks(account.teamId!, {
           spaceIds: account.selectedSpaceIds,
@@ -242,6 +249,20 @@ const TOOLS: Record<string, ToolDef> = {
           matched.push(t);
         }
         if (res.last_page !== false || res.tasks.length === 0) break;
+        if (page === maxPages - 1) capped = true;
+      }
+      if (input.count_only) {
+        const tally = (key: (t: (typeof matched)[number]) => string) =>
+          Object.fromEntries(
+            Object.entries(matched.reduce<Record<string, number>>((acc, t) => ((acc[key(t)] = (acc[key(t)] ?? 0) + 1), acc), {})).sort((a, b) => b[1] - a[1]),
+          );
+        return JSON.stringify({
+          total: matched.length,
+          ...(capped ? { note: "More than 3000 matching tasks — the count is a lower bound." } : {}),
+          by_list: tally((t) => t.list.name ?? t.list.id),
+          by_status: tally((t) => t.status.status),
+          by_client: tally((t) => String(keyFields(t.custom_fields, ["Client Code"])["Client Code"] ?? "(none)")),
+        });
       }
       const rows = matched.slice(0, limit).map((t) => compactTask(t, ctx.keyFields));
       if (input.with_last_comment && ctx.agent.permissions.includes("read_comments")) {

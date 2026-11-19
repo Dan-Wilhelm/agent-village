@@ -20,8 +20,14 @@ export interface AgentContext {
   account: ClickUpAccount | null;
   /** Leads only: the other agents of the team. */
   teamMembers: Array<{ id: string; name: string; role: string }>;
-  /** Stable system prompt (cached) + a small dynamic block (date/time, mode). */
+  /**
+   * FROZEN system prompt: only things that stay the same during a conversation.
+   * (Thinking blocks are bound to the exact prompt — changing it mid-conversation
+   * invalidates the agent's earlier reasoning.)
+   */
   system: Anthropic.TextBlockParam[];
+  /** Per-turn facts (time, mode, introduction, inbox) — appended as a role:"system" message, never edited. */
+  turnNote: string;
 }
 
 const agentDir = (agent: AgentEntry) => agent.path.split("/").slice(0, -1).join("/");
@@ -54,7 +60,7 @@ async function openInboxItems(companyDir: string, agentId: string) {
 export async function loadAgentContext(
   agentId: string,
   mode: "work" | "training" = "work",
-  opts: { delegatedBy?: { name: string; role: string } } = {},
+  opts: { delegatedBy?: { name: string; role: string }; firstTurn?: boolean } = {},
 ): Promise<AgentContext> {
   const registry = await loadRegistry();
   const agent = registry.agents.find((a) => a.id === agentId);
@@ -126,16 +132,17 @@ ${context || "(empty — you have not learned company-specific rules yet)"}
 </how_you_work>`;
 
   const now = new Date().toLocaleString("en-GB", { timeZone: "Europe/Berlin", dateStyle: "full", timeStyle: "short" });
-  const dynamic =
-    `Current date and time (Europe/Berlin): ${now}.` +
+  const first = opts.firstTurn ?? true;
+  const turnNote =
+    `Current date and time (Europe/Berlin): ${now}. Mode: ${mode === "training" ? "training" : "work"}.` +
     (!boundAccount ? `\nNo work environment is connected for ${company.name} yet: you have no ClickUp access. Say so if Dan asks for real work.` : "") +
     (opts.delegatedBy
       ? `\nDELEGATED REQUEST: your team lead ${opts.delegatedBy.name} (${opts.delegatedBy.role}) asks you on Dan's behalf. Do the work and reply with the result only — no introduction, no questions back unless something essential is missing. Proposals you make are shown to Dan for approval as usual.`
       : "") +
-    (!agent.introduced && !opts.delegatedBy
+    (first && !agent.introduced && !opts.delegatedBy
       ? "\nINTRODUCTION: this is your first conversation with Dan. Briefly introduce yourself (name, role, when you will come by and what you will bring him). Then walk him through the points in your playbook marked “to confirm” — max 3 at a time, as short questions with your assumption, so he can just say yes or correct it. Turn every answer into a playbook rule via propose_playbook_rule (it replaces the assumption). If he asks for real work right away, do it first and continue the introduction afterwards."
       : "") +
-    (inbox.length && !opts.delegatedBy
+    (first && inbox.length && !opts.delegatedBy
       ? `\nOPEN “DECIDE LATER” ITEMS from earlier conversations (Dan's words). At a fitting moment (not in the middle of urgent work) ask him briefly what to do with each: learn (propose_playbook_rule), it was a request (do it), or discard. Then call resolve_inbox_item.\n${inbox.join("\n")}`
       : "") +
     (mode === "training"
@@ -151,9 +158,7 @@ ${context || "(empty — you have not learned company-specific rules yet)"}
     companyDir,
     account: boundAccount,
     teamMembers,
-    system: [
-      { type: "text", text: stable, cache_control: { type: "ephemeral" } },
-      { type: "text", text: dynamic },
-    ],
+    system: [{ type: "text", text: stable, cache_control: { type: "ephemeral" } }],
+    turnNote,
   };
 }

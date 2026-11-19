@@ -9,7 +9,15 @@ const bodySchema = z.object({
   mode: z.enum(["work", "training"]).default("work"),
   // The conversation lives in the browser; validated loosely here, strictly by the API.
   messages: z
-    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]) }))
+    .array(
+      z
+        .object({
+          role: z.enum(["user", "assistant", "system"]),
+          content: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]),
+        })
+        // System messages in the history are only the server's own per-turn notes.
+        .refine((m) => m.role !== "system" || (typeof m.content === "string" && m.content.startsWith("Current date and time (Europe/Berlin):")), "unexpected system message"),
+    )
     .min(1)
     .max(400),
 });
