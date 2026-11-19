@@ -101,7 +101,8 @@ export function Hud({ ownerName }: { ownerName: string }) {
                   <li key={q.id}>
                     <button
                       type="button"
-                      onClick={() => (conversations[q.agentId] ? focusConversation(q.agentId) : openInteraction(q.id))}
+                      // Trigger visits always go through openInteraction (marks the visit as seen, reveals a prepared answer).
+                      onClick={() => (q.visitId || !conversations[q.agentId] ? openInteraction(q.id) : focusConversation(q.agentId))}
                       className="flex w-full items-center gap-2 rounded-xl px-2 py-1 text-left hover:bg-parchment focus-visible:outline-2 focus-visible:outline-sky"
                     >
                       <span
@@ -114,6 +115,11 @@ export function Hud({ ownerName }: { ownerName: string }) {
                           {a?.name ?? "Agent"}
                           {a?.status === "walking" && (
                             <span className="ml-1 text-xs font-semibold text-ink/50">· on the way</span>
+                          )}
+                          {conversations[q.agentId]?.hidden && (
+                            <span className={`ml-1 text-xs font-semibold ${conversations[q.agentId]?.streaming ? "text-ink/50" : "text-leaf"}`}>
+                              {conversations[q.agentId]?.streaming ? "· preparing…" : "· ready ✓"}
+                            </span>
                           )}
                         </span>
                         <span className="block truncate text-xs text-ink/70">

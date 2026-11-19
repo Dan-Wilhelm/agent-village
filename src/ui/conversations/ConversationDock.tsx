@@ -35,7 +35,9 @@ export function ConversationDock() {
         if (visit.visitId) {
           // A trigger visit: the agent starts on its own; the visit is marked as seen.
           void fetch("/api/visits", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: visit.visitId }) });
-          open(visit.agentId, agent?.name ?? "Agent", { opening: visit.body, triggerLabel: `⏰ ${visit.title}` });
+          const prepared = useConversations.getState().conversations[visit.agentId];
+          if (prepared?.preparedFor === visit.visitId) useConversations.getState().focus(visit.agentId); // already (being) prepared
+          else open(visit.agentId, agent?.name ?? "Agent", { opening: visit.body, triggerLabel: `⏰ ${visit.title}` });
         } else {
           open(visit.agentId, agent?.name ?? "Agent", visit.body ? { opening: visit.body } : undefined);
         }
@@ -44,7 +46,9 @@ export function ConversationDock() {
     [open, setCollapsed],
   );
 
-  if (order.length === 0) return null;
+  // Conversations prepared in the background stay out of sight until Dan opens them.
+  const visibleOrder = order.filter((id) => !conversations[id]?.hidden);
+  if (visibleOrder.length === 0) return null;
   const current = active ? conversations[active] : null;
 
   return (
@@ -55,7 +59,7 @@ export function ConversationDock() {
       onKeyUp={(e) => e.stopPropagation()}
     >
       <div className="flex items-end gap-1 overflow-x-auto px-1">
-        {order.map((id) => {
+        {visibleOrder.map((id) => {
           const c = conversations[id];
           const a = agents[id];
           return (

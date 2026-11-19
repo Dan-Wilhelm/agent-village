@@ -45,6 +45,10 @@ export interface Conversation {
   streaming: boolean;
   /** What the owner wrote — the only text "decide later" may store. */
   ownerNotes: string[];
+  /** Prepared in the background for a trigger visit; not shown in the dock until Dan opens it. */
+  hidden?: boolean;
+  /** The trigger visit this conversation was prepared for. */
+  preparedFor?: string;
 }
 
 interface ConversationState {
@@ -60,6 +64,11 @@ interface ConversationState {
     opts?: { opening?: string; mode?: "work" | "training"; visitTitle?: string; triggerLabel?: string },
   ) => void;
   focus: (agentId: string) => void;
+  /**
+   * A trigger visit arrived: start the agent's work right away, invisibly, while it walks over.
+   * Lives only in this browser tab (nothing stored). Returns false if a conversation already exists.
+   */
+  prepare: (agentId: string, agentName: string, visit: { opening: string; triggerLabel: string; visitId: string }) => boolean;
   close: (agentId: string) => void;
   setMode: (agentId: string, mode: "work" | "training") => void;
   /** `asNote`: text comes from a trigger, not from Dan (shown as a note, never stored as feedback). */
@@ -73,6 +82,12 @@ const TOOL_LABEL: Record<string, string> = {
   get_task: "reading a task",
   get_calendar: "checking your calendar",
   read_mission_control_replies: "reading Mission Control",
+  ask_colleague: "asking a colleague",
+  ask_team_member: "asking the team",
+  find_meeting_notes: "reading meeting notes",
+  find_docs: "looking for docs",
+  read_doc: "reading a doc",
+  list_task_templates: "looking at templates",
 };
 export const toolLabel = (name: string) => TOOL_LABEL[name] ?? "preparing a proposal";
 
@@ -102,6 +117,7 @@ export const useConversations = create<ConversationState>()((set, get) => {
       } else if (opts?.mode) {
         patch(agentId, (c) => ({ ...c, mode: opts.mode! }));
       }
+      patch(agentId, (c) => (c.hidden ? { ...c, hidden: false } : c));
       set({ active: agentId, dockCollapsed: false });
       if (!opts?.opening) return;
       const conv = get().conversations[agentId];
@@ -117,7 +133,32 @@ export const useConversations = create<ConversationState>()((set, get) => {
 
     focus: (agentId) => {
       sceneBridge.unlock();
+      patch(agentId, (c) => (c.hidden ? { ...c, hidden: false } : c));
       set({ active: agentId, dockCollapsed: false });
+    },
+
+    prepare: (agentId, agentName, visit) => {
+      if (get().conversations[agentId]) return false;
+      set((s) => ({
+        conversations: {
+          ...s.conversations,
+          [agentId]: {
+            agentId,
+            agentName,
+            mode: "work",
+            history: [],
+            items: [],
+            proposals: {},
+            streaming: false,
+            ownerNotes: [],
+            hidden: true,
+            preparedFor: visit.visitId,
+          },
+        },
+        order: [...s.order, agentId],
+      }));
+      void get().send(agentId, visit.opening, { asNote: visit.triggerLabel });
+      return true;
     },
 
     close: (agentId) => {
@@ -131,7 +172,8 @@ export const useConversations = create<ConversationState>()((set, get) => {
         const { [agentId]: _gone, ...rest } = s.conversations;
         void _gone;
         const order = s.order.filter((id) => id !== agentId);
-        return { conversations: rest, order, active: s.active === agentId ? (order.at(-1) ?? null) : s.active };
+        const visible = order.filter((id) => !rest[id]?.hidden);
+        return { conversations: rest, order, active: s.active === agentId ? (visible.at(-1) ?? null) : s.active };
       });
       releaseAgent(agentId);
     },
@@ -225,8 +267,10 @@ export const useConversations = create<ConversationState>()((set, get) => {
         patch(agentId, (x) => ({ ...x, items: [...x.items, { kind: "error", text: err instanceof Error ? err.message : "Something went wrong." }] }));
       } finally {
         patch(agentId, (x) => ({ ...x, streaming: false }));
-        const mode = get().conversations[agentId]?.mode;
-        setAgentActivity(agentId, mode === "training" ? "training" : "waiting", agentText ? "💬" : undefined);
+        const after = get().conversations[agentId];
+        const mode = after?.mode;
+        // A prepared visit is ready before Dan opened it: say so in the speech bubble.
+        setAgentActivity(agentId, mode === "training" ? "training" : "waiting", after?.hidden ? "✓ ready" : agentText ? "💬" : undefined);
       }
     },
 

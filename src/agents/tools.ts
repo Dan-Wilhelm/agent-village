@@ -57,6 +57,13 @@ export interface ToolContext {
   delegate?: (memberId: string, request: string) => Promise<string>;
   /** How many team requests this turn made (capped). */
   delegations?: number;
+  /** Ask another agent of the same company (read-only colleague turn). Not set inside colleague/delegated turns. */
+  askColleague?: (colleagueId: string, question: string) => Promise<string>;
+  /** Other agents of the same company (id, name, role). */
+  colleagues?: Array<{ id: string; name: string; role: string }>;
+  colleagueQuestions?: number;
+  /** Answering a colleague's question: no writes, no proposals. */
+  readOnly?: boolean;
   /** Members of the lead's team (id, name, role). */
   teamMembers?: Array<{ id: string; name: string; role: string }>;
 }
@@ -795,6 +802,35 @@ const TOOLS: Record<string, ToolDef> = {
     },
   },
 
+  ask_colleague: {
+    readsUntrusted: true,
+    permission: null,
+    definition: {
+      name: "ask_colleague",
+      description:
+        "Ask another agent of your company for information Dan gave them (their playbook rules, saved meeting notes, open notes) or that they can look up with their own tools. Use it when Dan says he told a colleague something, or when a colleague's knowledge clearly helps. The colleague answers with the source; it cannot act. Max 4 questions per answer.",
+      input_schema: {
+        type: "object",
+        properties: {
+          colleague_id: { type: "string", description: "Agent id from your list of colleagues" },
+          question: { type: "string", description: "Precise question incl. context — the colleague does not see this conversation" },
+        },
+        required: ["colleague_id", "question"],
+        additionalProperties: false,
+      },
+    },
+    input: z.object({ colleague_id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,62}$/), question: z.string().min(5).max(3000) }),
+    run: async (input: { colleague_id: string; question: string }, ctx) => {
+      if (!ctx.askColleague || !ctx.colleagues) throw new Error("You can't ask colleagues from here — answer with what you know.");
+      if (!ctx.colleagues.some((c) => c.id === input.colleague_id)) {
+        throw new Error(`Not a colleague in your company. Colleagues: ${ctx.colleagues.map((c) => `${c.id} (${c.name}, ${c.role})`).join(", ") || "none"}`);
+      }
+      ctx.colleagueQuestions = (ctx.colleagueQuestions ?? 0) + 1;
+      if (ctx.colleagueQuestions > 4) throw new Error("You already asked 4 colleague questions in this answer — work with what you have.");
+      return ctx.askColleague(input.colleague_id, input.question);
+    },
+  },
+
   ask_team_member: {
     readsUntrusted: true,
     permission: null,
@@ -888,20 +924,39 @@ async function docInAllowedSpace(ctx: ToolContext, parent: { id: string; type: n
   return false;
 }
 
+/** Tools that change something or propose a change — never available in a read-only colleague turn. */
+const WRITE_TOOLS = new Set([
+  "propose_comment",
+  "propose_task_change",
+  "draft_task",
+  "propose_mission_control_message",
+  "propose_save_meeting_notes",
+  "propose_playbook_rule",
+  "resolve_inbox_item",
+  "ask_team_member",
+  "ask_colleague",
+]);
+
 /** Names of tools whose results contain text written by others. */
 export const UNTRUSTED_TOOL_NAMES = new Set(Object.entries(TOOLS).filter(([, t]) => t.readsUntrusted).map(([n]) => n));
 
 /** Tool definitions for an agent, filtered by its permissions (stable order for prompt caching). */
-export function toolsFor(agent: AgentProfile): Anthropic.Tool[] {
+export function toolsFor(agent: AgentProfile, opts: { readOnly?: boolean } = {}): Anthropic.Tool[] {
   return Object.values(TOOLS)
     .filter((t) => (t.permission === null || agent.permissions.includes(t.permission)) && (!t.leadOnly || agent.kind === "lead"))
+    .filter((t) => !opts.readOnly || !WRITE_TOOLS.has(t.definition.name))
     .map((t) => ({ ...t.definition, eager_input_streaming: true }));
 }
 
 /** Runs one tool call. Input is validated against the schema first; errors become is_error results. */
 export async function runTool(name: string, rawInput: unknown, ctx: ToolContext): Promise<{ content: string; isError: boolean }> {
   const tool = TOOLS[name];
-  if (!tool || (tool.permission && !ctx.agent.permissions.includes(tool.permission)) || (tool.leadOnly && ctx.agent.kind !== "lead")) {
+  if (
+    !tool ||
+    (tool.permission && !ctx.agent.permissions.includes(tool.permission)) ||
+    (tool.leadOnly && ctx.agent.kind !== "lead") ||
+    (ctx.readOnly && WRITE_TOOLS.has(name))
+  ) {
     return { content: `Tool ${name} is not available to you.`, isError: true };
   }
   const parsed = tool.input.safeParse(rawInput);

@@ -62,3 +62,17 @@ describe("trigger descriptions (shown to Dan and to the agent itself)", () => {
     expect(describeTrigger({ type: "on_call" })).toBe("when called");
   });
 });
+
+describe("previous scheduled visit", () => {
+  it("finds the previous slot today, or the last one on an earlier day", async () => {
+    const { previousScheduledVisit } = await import("@/agents/schedule");
+    const rita = [{ type: "schedule" as const, days: ["mon", "tue", "wed", "thu", "fri"] as ("mon" | "tue" | "wed" | "thu" | "fri")[], time: ["09:00", "13:00", "17:00"] }];
+    // Monday 16.11.2026 13:02 Berlin (12:02Z) → previous visit 09:00 Berlin (08:00Z), the current 13:00 slot is skipped
+    expect(previousScheduledVisit(rita, new Date("2026-11-16T12:02:00Z"))?.toISOString()).toBe("2026-11-16T08:00:00.000Z");
+    // Monday 09:01 → last visit Friday 17:00 Berlin (16:00Z)
+    expect(previousScheduledVisit(rita, new Date("2026-11-16T08:01:00Z"))?.toISOString()).toBe("2026-11-13T16:00:00.000Z");
+    // summer time: Monday 06.07.2026 13:05 Berlin (11:05Z) → 09:00 Berlin = 07:00Z
+    expect(previousScheduledVisit(rita, new Date("2026-07-06T11:05:00Z"))?.toISOString()).toBe("2026-07-06T07:00:00.000Z");
+    expect(previousScheduledVisit([{ type: "on_call" }], new Date())).toBeNull();
+  });
+});

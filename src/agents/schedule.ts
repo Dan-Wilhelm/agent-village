@@ -138,3 +138,34 @@ export function describeTrigger(t: { type: string; days?: string[]; time?: strin
   if (t.type === "before_event") return `${t.minutes} min before ${t.match}`;
   return "when called";
 }
+
+/**
+ * The agent's previous scheduled visit before `now` (Berlin time), looking back up to 7 days.
+ * Lets an agent show "what's new since my last visit" without storing anything.
+ */
+export function previousScheduledVisit(triggers: Trigger[], now: Date, skipMinutes = 15): Date | null {
+  const schedules = triggers.filter((t): t is Extract<Trigger, { type: "schedule" }> => t.type === "schedule");
+  if (!schedules.length) return null;
+  // Walk back minute by minute would be slow; instead check each candidate time of the last 7 days.
+  const start = now.getTime() - skipMinutes * 60_000;
+  let best: number | null = null;
+  for (let day = 0; day <= 7 && best === null; day++) {
+    for (const t of schedules) {
+      for (const hhmm of [t.time].flat()) {
+        const [h, m] = hhmm.split(":").map(Number);
+        // Find the UTC instant whose Berlin wall clock is <date of (now - day)> hh:mm.
+        const probe = new Date(start - day * 86_400_000);
+        const z = zonedParts(probe);
+        if (!t.days.includes(z.weekday)) continue;
+        const guess = Date.UTC(Number(z.date.slice(0, 4)), Number(z.date.slice(5, 7)) - 1, Number(z.date.slice(8, 10)), h, m);
+        const offset = (() => {
+          const zz = zonedParts(new Date(guess));
+          return (zz.hour * 60 + zz.minute - (h * 60 + m) + 1440 * 2) % 1440; // Berlin offset in minutes (60 or 120)
+        })();
+        const instant = guess - offset * 60_000;
+        if (instant <= start && (best === null || instant > best)) best = instant;
+      }
+    }
+  }
+  return best === null ? null : new Date(best);
+}

@@ -210,6 +210,12 @@ Approving a draft **moves** it from the drafts list into the target list (v3 mov
 - **Strict company isolation:** a company note's `clickup_team_id` binds it to one ClickUp workspace. Agents of a company without (or with another) binding get no ClickUp access — enforced when loading tools and again when executing approvals.
 - **Archive:** moves an agent's folder to `Companies/<C>/Archive/<Role> (<date>)/` (out of the village, kept in the vault and its git history).
 
+### 4.5c Colleague questions and prepared visits (2026-11-19)
+
+- **Colleague questions:** every agent can `ask_colleague` another agent of the *same company* (max 4 per answer, no chains). The colleague answers in a **read-only** turn (no proposals, no writes) only from what it really knows — approved rules, saved meeting notes, open "decide later" notes, live reads within its own permissions — and names the source and age. The asking agent uses facts from ClickUp or saved notes directly (with source); assumptions, old information or anything leading to an action are confirmed with Dan first. A colleague's answer counts as untrusted content (no "without asking" afterwards). Agents only know what was saved — conversations themselves are never stored.
+- **Prepared visits:** when a trigger visit reaches the open village, the browser starts the agent's turn immediately (invisible conversation) while the agent walks over; the waiting card shows "preparing…" → "ready ✓" and opening it shows the finished answer without a new request. Nothing is stored server-side; if the village is closed, preparation starts when it is opened.
+- **"New since my last visit":** the first turn of a conversation tells scheduled agents when their previous scheduled visit was (computed from the schedule, Berlin time), so they can filter with `updated_after`.
+
 ### 4.5 The Dispatcher: one input, the right agent comes running
 
 A central feature: I don't need to know which agent to call.

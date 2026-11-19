@@ -31,11 +31,14 @@ export async function runAgentTurn(opts: {
   emit: (event: EngineEvent) => void;
   /** Set when a team lead hands this request to a member (depth 1 only). */
   delegatedBy?: { name: string; role: string };
+  /** Set when a colleague asks a question: read-only turn (depth 1 only). */
+  askedBy?: { name: string; role: string };
 }) {
   const firstTurn = !opts.messages.some((m) => m.role === "assistant");
-  const ctx = await loadAgentContext(opts.agentId, opts.mode, { delegatedBy: opts.delegatedBy, firstTurn });
+  const ctx = await loadAgentContext(opts.agentId, opts.mode, { delegatedBy: opts.delegatedBy, askedBy: opts.askedBy, firstTurn });
+  const readOnly = Boolean(opts.askedBy);
   const client = new Anthropic();
-  const tools = toolsFor(ctx.agent);
+  const tools = toolsFor(ctx.agent, { readOnly });
   const toolCtx: ToolContext = {
     agent: ctx.agent,
     account: ctx.account,
@@ -46,7 +49,8 @@ export async function runAgentTurn(opts: {
     proposals: [],
     // Only proposal kinds Dan allowed for THIS agent run without asking; executeProposal re-validates everything.
     // Never in delegated turns (the request came from another agent, not from Dan).
-    autoExecute: opts.delegatedBy
+    readOnly,
+    autoExecute: opts.delegatedBy || readOnly
       ? undefined
       : async (p) => {
           const r = await executeProposal({ agentId: p.agentId, kind: p.kind, args: p.args, decision: "approve" });
@@ -57,7 +61,26 @@ export async function runAgentTurn(opts: {
       (m) => m.role === "assistant" && Array.isArray(m.content) && m.content.some((b) => b.type === "tool_use" && UNTRUSTED_TOOL_NAMES.has(b.name)),
     ),
   };
-  if (ctx.agent.kind === "lead" && !opts.delegatedBy) {
+  // Colleague questions: only from Dan's own conversation (no chains), answered read-only.
+  if (!opts.delegatedBy && !opts.askedBy) {
+    toolCtx.colleagues = ctx.colleagues;
+    toolCtx.askColleague = async (colleagueId, question) => {
+      const colleague = ctx.colleagues.find((c) => c.id === colleagueId);
+      let answer = "";
+      await runAgentTurn({
+        agentId: colleagueId,
+        messages: [{ role: "user", content: question }],
+        mode: "work",
+        askedBy: { name: ctx.agent.name, role: ctx.agent.role },
+        emit: (e) => {
+          if (e.type === "text") answer += e.text;
+          else if (e.type === "error") answer += `\n[${e.message}]`;
+        },
+      });
+      return `${colleague?.name ?? colleagueId} (${colleague?.role ?? "colleague"}) answers:\n${answer.trim() || "(no answer)"}`;
+    };
+  }
+  if (ctx.agent.kind === "lead" && !opts.delegatedBy && !opts.askedBy) {
     toolCtx.teamMembers = ctx.teamMembers;
     toolCtx.delegate = async (memberId, request) => {
       let answer = "";

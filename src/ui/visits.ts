@@ -1,5 +1,6 @@
 "use client";
 
+import { useConversations } from "@/ui/conversations/store";
 import { summonAgent } from "@/world/director";
 import { useVillage, type Priority } from "@/world/store";
 
@@ -39,7 +40,11 @@ export function startVisitPolling(): () => void {
             if (queue.some((q) => q.visitId === v.id)) continue;
             // If the agent is already at the desk for something else, the visit waits for the next round.
             if (queue.some((q) => q.agentId === v.agentId)) continue;
-            summonAgent(v.agentId, { title: v.reason, body: openingFor(v), priority: v.priority, visitId: v.id });
+            const opening = openingFor(v);
+            summonAgent(v.agentId, { title: v.reason, body: opening, priority: v.priority, visitId: v.id });
+            // Option 1: the agent starts working while it walks over — ready when Dan opens the visit.
+            const name = useVillage.getState().agents[v.agentId]?.name ?? "Agent";
+            useConversations.getState().prepare(v.agentId, name, { opening, triggerLabel: `⏰ ${v.reason}`, visitId: v.id });
           }
         }
       } catch {
