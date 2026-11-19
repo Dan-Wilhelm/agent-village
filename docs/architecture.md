@@ -301,37 +301,41 @@ The owner is not stored in the database: the owner check uses `OWNER_EMAIL` (ver
 - Phase 3d adds `visits` (pointers only, see 4.4) and `push_subscriptions` (device endpoints). The app is installable as a PWA (manifest + a push-only service worker that caches nothing).
 - **Agent knowledge** (playbooks, training, feedback, meeting notes) will live in the owner's Obsidian brain vault, in a separate private repo (`brain-agents`, appearing as `30-Areas/Agent Village/`), so it works across future environments, not only ClickUp. The app's token only reaches that repo, never the personal vault.
 
-## 7. Security
+## 7. Security (reviewed in Phase 6, 2026-11-19)
 
 1. **Login**
-   - Better Auth (Phase 2.5, replacing Clerk): sign-in only with **Google** (verified email) or a **passkey**; no passwords, no magic links.
-   - Three independent locks: Google profile check, no user creation except the owner, no session for anyone but the owner (covers passkeys).
-   - Sessions last 7 days (refreshed daily while in use), httpOnly + Secure cookies, rate limiting in the database, CSRF/origin checks on.
-   - Recommended: 2-step verification on the owner's Google account, which becomes the main key.
+   - Better Auth: sign-in only with **Google** (verified email) or a **passkey**; no passwords, no magic links.
+   - Three independent locks: Google profile check, no user creation except the owner, no session for anyone but the owner (covers passkeys). Optional `OWNER_USER_ID` pin.
+   - Sessions last 7 days (refreshed daily while in use), httpOnly + Secure + SameSite=Lax cookies, login rate limiting in the database.
 2. **Defense in depth**
-   - Every server route and server action checks *both* that a valid session exists *and* that the user is the owner (`OWNER_EMAIL`, verified; optional `OWNER_USER_ID`).
-   - Middleware alone is not trusted.
-3. **No public endpoints except signed ones**
-   - There are no public webhook or cron endpoints anymore; future ones must authenticate every request.
+   - Every route handler and server action checks the owner server-side; the proxy is only an optimistic gate.
+   - The dev login route only exists with `NODE_ENV=development` and a secret header.
+   - API writes must come from the same site (Fetch Metadata / Origin check in the proxy; Next.js checks server actions itself).
+3. **Endpoints**
+   - Cron: `Bearer CRON_SECRET`, constant-time compare, fails closed.
+   - Push subscriptions only for the real browser push services (no requests to arbitrary URLs).
 4. **Secrets**
-   - ClickUp tokens are encrypted with AES-256-GCM before they are stored.
-   - The master key lives only in a Vercel *sensitive* environment variable.
-   - The Anthropic key is an env var.
-   - None of them is ever sent to the browser, logged or committed. `.env*` is in `.gitignore`.
-   - A secret scanner runs in CI.
-5. **Least privilege**
-   - Each agent only gets the tools it is allowed.
-   - Write actions need approval unless explicitly allowed.
-   - There is no "delete" tool in the MVP.
+   - ClickUp tokens: AES-256-GCM (random IV, 16-byte tag enforced, row-bound AAD). Master key only in a Vercel *sensitive* env var.
+   - No secret is sent to the browser, logged, put into push texts or committed. GitHub secret scanning with push protection is on.
+5. **Least privilege & isolation**
+   - Each agent only gets the tools of its permissions; write actions are proposals unless an action type is explicitly allowed "without asking".
+   - A company's agents only get the ClickUp workspace bound to that company (`clickup_team_id`), enforced for tools and approvals.
+   - Search results are re-filtered by allowed space; approvals re-validate permission, space, company binding and the discretion filter.
+   - "Reject" only deletes a task that is still in the drafts list.
 6. **Prompt injection**
-   - All ClickUp content is treated as untrusted data.
-   - Agents can't change their own permissions or playbook without your confirmation.
+   - All ClickUp, calendar, doc and Mission Control content is treated as data.
+   - **"Without asking" is suspended** as soon as a conversation contains content written by others (tasks, comments, calendar, docs, replies) and never applies to delegated requests — such actions become normal approval cards.
+   - Agents can't change their own permissions; playbook rules need approval, and a rule can only replace a *to confirm* line (shown on the card).
+   - Per-turn system notes are HMAC-signed by the server; the browser cannot add system-level instructions.
+   - Team-lead delegation is limited to depth 1 and 6 requests per answer.
 7. **Web hardening**
-   - Strict Content-Security-Policy, HSTS and secure cookies.
-   - Rate limiting on API routes.
-   - Input validation with Zod everywhere.
-8. **Audit:** the activity log is append-only.
-9. **Review:** a full security review in Phase 6 before calling the MVP finished.
+   - Content-Security-Policy: same-origin for scripts, styles, images, fonts and connections; no frames, no plugins, `frame-ancestors 'none'`. Inline scripts stay allowed because Cache Components (partial prerendering) can't use nonces; XSS defence relies on React escaping (no raw HTML is rendered) and validated colours/links.
+   - HSTS, nosniff, `X-Frame-Options: DENY`, strict Referrer-Policy, Permissions-Policy (microphone only for this site).
+   - App-level rate limits (database, fixed window) on agent turns, approvals, dispatcher, wizard, push test and read-heavy routes.
+   - Vercel Firewall with Bot Protection (staged: log first, then challenge); automatic DDoS mitigation.
+   - Zod validation on every input; request size limits on the agent route.
+8. **Audit:** append-only activity log, visible in the village (Agents → Activity).
+9. **Dependencies:** Dependabot alerts + security updates; `npm audit --omit=dev` clean at review time.
 
 ---
 
@@ -375,7 +379,7 @@ agent-village/
 | 3 | Agent engine: Workflow runs, introduction, training mode, feedback loop, approvals, activity log, push, voice input |
 | 4 | Dispatcher + MVP agents: Daily Team Briefing, Client Review Tracker, Internal Review Reminder, Landing Page / Static Ad Brief / Video task agents, Meeting Prep ← **done 2026-11-16** (see 4.5a) |
 | 5 | Agent creation wizard ← **done 2026-11-17** (see 4.5b) |
-| 6 | Security review, README, self-hosting setup |
+| 6 | Security review, README, self-hosting setup ← **done 2026-11-19** |
 
 ---
 
