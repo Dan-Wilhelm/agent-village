@@ -6,7 +6,7 @@ import { rateLimitResponse } from "@/lib/rate-limit";
 
 const bodySchema = z.object({
   agentId: z.string().regex(/^[a-z0-9][a-z0-9-]{1,62}$/),
-  kind: z.enum(["comment", "task_change", "draft_task", "mission_control_message", "playbook_rule", "meeting_notes", "figma_comment"]),
+  kind: z.enum(["comment", "task_change", "draft_task", "mission_control_message", "playbook_rule", "meeting_notes", "figma_comment", "rule_change"]),
   args: z.record(z.string(), z.unknown()),
   decision: z.enum(["approve", "reject"]),
 });

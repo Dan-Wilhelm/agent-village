@@ -14,6 +14,8 @@ const LABEL: Record<string, string> = {
   "clickup.task_created": "created a task in ClickUp",
   "clickup.mission_control_message": "messaged Mission Control",
   "vault.rule_learned": "learned a playbook rule",
+  "vault.rule_changed": "changed a playbook rule",
+  "vault.rule_removed": "removed a playbook rule",
   "vault.meeting_notes_saved": "saved meeting notes",
   "visits.created": "scheduled visits",
   "agent.created": "created an agent",

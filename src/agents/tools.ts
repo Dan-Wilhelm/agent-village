@@ -14,6 +14,7 @@ import { normaliseNodeId, parseFigmaUrl } from "@/integrations/figma/url";
 import { listVaultFiles, readVaultFile, writeVaultFile } from "@/integrations/vault/github";
 
 import { assertDiscreet } from "./discretion";
+import { findRuleLines } from "./rule-lines";
 import type { AgentEntry } from "./registry";
 import type { AgentProfile } from "./schema";
 
@@ -31,7 +32,8 @@ export type ProposalKind =
   | "mission_control_message"
   | "playbook_rule"
   | "meeting_notes"
-  | "figma_comment";
+  | "figma_comment"
+  | "rule_change";
 
 /** A tool result with images (e.g. Figma frames the agent should look at). */
 export interface ToolOutput {
@@ -1060,6 +1062,73 @@ const TOOLS: Record<string, ToolDef> = {
     },
   },
 
+  propose_rule_change: {
+    permission: null,
+    definition: {
+      name: "propose_rule_change",
+      description:
+        "Dan wants a rule in your playbook removed or changed (\"forget the rule about …\", \"change it to …\"). Quote the existing rule (enough words to identify exactly one line). Leave new_rule empty to delete it, or give the new wording to replace it in place. Optionally also remove/replace the matching test case. Dan approves before anything changes.",
+      input_schema: {
+        type: "object",
+        properties: {
+          file: { type: "string", enum: ["craft", "context"] },
+          current_rule: { type: "string", description: "Words from the existing rule (min. 10 characters, unique)" },
+          new_rule: { type: "string", description: "New wording (leave out to delete the rule)" },
+          current_test_case: { type: "string", description: "Words from the matching test case to remove/replace (optional)" },
+          new_test_case: { type: "string", description: "New test case (optional)" },
+          reason: { type: "string", description: "Short reason (Dan's words, no ClickUp content)" },
+        },
+        required: ["file", "current_rule", "reason"],
+        additionalProperties: false,
+      },
+    },
+    input: z.object({
+      file: z.enum(["craft", "context"]),
+      current_rule: z.string().min(10).max(600),
+      new_rule: z.string().min(5).max(1200).optional(),
+      current_test_case: z.string().min(10).max(600).optional(),
+      new_test_case: z.string().min(5).max(800).optional(),
+      reason: z.string().max(400),
+    }),
+    run: async (
+      input: { file: "craft" | "context"; current_rule: string; new_rule?: string; current_test_case?: string; new_test_case?: string; reason: string },
+      ctx,
+    ) => {
+      const dir = ctx.agent.path.split("/").slice(0, -1).join("/");
+      const fileName = input.file === "craft" ? "Craft.md" : "Context.md";
+      const note = await readVaultFile(`${dir}/${fileName}`);
+      if (!note) throw new Error(`Your ${fileName} is empty — there is no rule to change.`);
+      const matches = findRuleLines(note.content, input.current_rule);
+      if (matches.length === 0) {
+        const other = await readVaultFile(`${dir}/${input.file === "craft" ? "Context.md" : "Craft.md"}`);
+        const elsewhere = other ? findRuleLines(other.content, input.current_rule).length : 0;
+        throw new Error(elsewhere ? `Not in ${fileName} — it is in the other playbook file. Call again with file="${input.file === "craft" ? "context" : "craft"}".` : `No rule in ${fileName} contains that text. Quote the rule as it is written in your playbook.`);
+      }
+      if (matches.length > 1) throw new Error(`That matches ${matches.length} rules — quote more words. Candidates:\n${matches.join("\n")}`);
+      let testLine: string | undefined;
+      if (input.current_test_case) {
+        const tests = await readVaultFile(`${dir}/Test cases.md`);
+        const found = tests ? findRuleLines(tests.content, input.current_test_case) : [];
+        if (found.length !== 1) throw new Error(found.length ? `The test case quote matches ${found.length} lines — quote more words.` : "No test case contains that text.");
+        testLine = found[0];
+      }
+      const action = input.new_rule ? "Change" : "Remove";
+      return newProposal(
+        ctx,
+        "rule_change",
+        {
+          file: input.file,
+          line: matches[0],
+          ...(input.new_rule ? { new_rule: input.new_rule } : {}),
+          ...(testLine ? { test_case_line: testLine } : {}),
+          ...(input.new_test_case ? { new_test_case: input.new_test_case } : {}),
+          reason: input.reason,
+        },
+        `${action} a ${input.file} rule`,
+      );
+    },
+  },
+
   propose_playbook_rule: {
     permission: null,
     definition: {
@@ -1137,6 +1206,7 @@ const WRITE_TOOLS = new Set([
   "propose_figma_comment",
   "propose_save_meeting_notes",
   "propose_playbook_rule",
+  "propose_rule_change",
   "resolve_inbox_item",
   "ask_team_member",
   "ask_colleague",

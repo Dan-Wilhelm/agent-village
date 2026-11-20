@@ -360,6 +360,13 @@ function ProposalCard({ conversationId, proposal: p }: { conversationId: string;
       ? String(p.args.text ?? "")
       : p.kind === "figma_comment"
       ? String(p.args.message ?? "")
+      : p.kind === "rule_change"
+      ? [
+          `Removes: ${String(p.args.line ?? "").replace(/^\s*[-*+]\s+/, "")}`,
+          ...(p.args.new_rule ? [`Adds: ${String(p.args.new_rule)}`] : []),
+          ...(p.args.test_case_line ? [`Test case ${p.args.new_test_case ? "replaced" : "removed"}: ${String(p.args.test_case_line).replace(/^\s*[-*+]\s+/, "")}`] : []),
+          `Why: ${String(p.args.reason ?? "")}`,
+        ].join("\n")
       : p.kind === "playbook_rule"
         ? `${String(p.args.rule ?? "")}\nTest: ${String(p.args.test_case ?? "")}${p.args.replaces ? `\nReplaces the open question: ${String(p.args.replaces)}` : ""}`
         : p.kind === "meeting_notes"
@@ -378,6 +385,7 @@ function ProposalCard({ conversationId, proposal: p }: { conversationId: string;
     playbook_rule: "Learn a rule",
     meeting_notes: "Save meeting notes (your vault)",
     figma_comment: "Comment in Figma (as you)",
+    rule_change: p.args.new_rule ? "Change a rule" : "Delete a rule",
   }[p.kind];
   return (
     <div className="rounded-2xl border-2 border-wood bg-white px-3 py-2">

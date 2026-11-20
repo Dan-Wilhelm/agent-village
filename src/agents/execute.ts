@@ -10,6 +10,7 @@ import { logActivity } from "@/lib/activity";
 
 import { assertDiscreet } from "./discretion";
 import { loadRegistry, type AgentEntry } from "./registry";
+import { replaceRuleLine } from "./rule-lines";
 import { sameListName, type ProposalKind } from "./tools";
 
 /**
@@ -49,6 +50,14 @@ const schemas = {
     notes: z.string().min(10).max(60_000),
     company_dir: z.string(),
   }),
+  rule_change: z.object({
+    file: z.enum(["craft", "context"]),
+    line: z.string().min(3).max(2000),
+    new_rule: z.string().min(5).max(1200).optional(),
+    test_case_line: z.string().min(3).max(2000).optional(),
+    new_test_case: z.string().min(5).max(800).optional(),
+    reason: z.string().max(400),
+  }),
   figma_comment: z.object({
     file_key: z.string().regex(/^[A-Za-z0-9]{10,64}$/),
     node_id: z.string().regex(/^[A-Za-z0-9:;]{3,120}$/).optional(),
@@ -64,6 +73,7 @@ const PERMISSION: Record<ProposalKind, string | null> = {
   playbook_rule: null,
   meeting_notes: "read_meeting_notes",
   figma_comment: "comment_figma",
+  rule_change: null,
 };
 
 async function account() {
@@ -266,6 +276,34 @@ export async function executeProposal(input: { agentId: string; kind: ProposalKi
       await appendToVault(`${dir}/Changelog.md`, "# Changelog\n", `- ${day}: ${args.file} rule added — ${args.source}`, `${agent.role}: changelog`);
       await logActivity(`agent:${agent.id}`, "vault.rule_learned", { file: args.file });
       return { ok: true, message: "Learned — the rule is in the playbook." };
+    }
+    case "rule_change": {
+      const args = schemas.rule_change.parse(input.args);
+      const dir = agent.path.split("/").slice(0, -1).join("/");
+      const day = stamp();
+      const fileName = args.file === "craft" ? "Craft.md" : "Context.md";
+      // Only list items of the agent's OWN playbook can be touched (never company or safety notes).
+      if (!/^\s*[-*+]\s+/.test(args.line)) throw new Error("Only rules (list items) can be changed.");
+      const note = await readVaultFile(`${dir}/${fileName}`);
+      if (!note) throw new Error("The playbook file is gone — nothing was changed.");
+      const replacement = args.new_rule ? `- ${args.new_rule.trim()} _(changed ${day})_` : null;
+      await writeVaultFile(`${dir}/${fileName}`, replaceRuleLine(note.content, args.line, replacement), `${agent.role}: rule ${replacement ? "changed" : "removed"}`, note.sha);
+      if (args.test_case_line || args.new_test_case) {
+        const tests = await readVaultFile(`${dir}/Test cases.md`);
+        let content = tests?.content ?? "# Test cases\n";
+        if (args.test_case_line && tests) {
+          try {
+            content = replaceRuleLine(content, args.test_case_line, args.new_test_case ? `- ${args.new_test_case.trim()}` : null);
+          } catch {
+            /* the test case was already gone — fine */
+          }
+        } else if (args.new_test_case) content = `${content.trimEnd()}\n- ${args.new_test_case.trim()}\n`;
+        await writeVaultFile(`${dir}/Test cases.md`, content, `${agent.role}: test case updated`, tests?.sha);
+      }
+      const old = args.line.replace(/^\s*[-*+]\s+/, "").slice(0, 160);
+      await appendToVault(`${dir}/Changelog.md`, "# Changelog\n", `- ${day}: ${args.file} rule ${replacement ? "changed" : "removed"} — ${args.reason} (was: ${old})`, `${agent.role}: changelog`);
+      await logActivity(`agent:${agent.id}`, replacement ? "vault.rule_changed" : "vault.rule_removed", { file: args.file });
+      return { ok: true, message: replacement ? "Changed — the new rule applies from now on." : "Removed — the rule no longer applies." };
     }
     case "figma_comment": {
       const args = schemas.figma_comment.parse(input.args);
