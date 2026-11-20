@@ -8,6 +8,9 @@ import type { ClickUpCustomField } from "@/integrations/clickup/client";
 import { apiValueFor, keyFields, matchesFieldFilter } from "@/integrations/clickup/fields";
 import { isOpenTask } from "@/integrations/clickup/mapping";
 import { fetchUpcomingEvents } from "@/integrations/calendar/feed";
+import { figmaClientFor, type FigmaAccount } from "@/integrations/figma/account";
+import { summariseNode } from "@/integrations/figma/client";
+import { normaliseNodeId, parseFigmaUrl } from "@/integrations/figma/url";
 import { listVaultFiles, readVaultFile, writeVaultFile } from "@/integrations/vault/github";
 
 import { assertDiscreet } from "./discretion";
@@ -21,7 +24,20 @@ import type { AgentProfile } from "./schema";
  * The only exception is draft_task, which writes into the private drafts list.
  */
 
-export type ProposalKind = "comment" | "task_change" | "draft_task" | "mission_control_message" | "playbook_rule" | "meeting_notes";
+export type ProposalKind =
+  | "comment"
+  | "task_change"
+  | "draft_task"
+  | "mission_control_message"
+  | "playbook_rule"
+  | "meeting_notes"
+  | "figma_comment";
+
+/** A tool result with images (e.g. Figma frames the agent should look at). */
+export interface ToolOutput {
+  text: string;
+  images: Array<{ media_type: "image/png" | "image/jpeg"; data: string }>;
+}
 
 export interface Proposal {
   id: string;
@@ -66,6 +82,8 @@ export interface ToolContext {
   readOnly?: boolean;
   /** Set by end_conversation: the UI opens the finish dialog after this turn. */
   finishRequested?: boolean;
+  /** The Figma account of the agent's company (null = not connected). */
+  figma?: FigmaAccount | null;
   /** Members of the lead's team (id, name, role). */
   teamMembers?: Array<{ id: string; name: string; role: string }>;
 }
@@ -80,7 +98,7 @@ interface ToolDef {
   leadOnly?: boolean;
   definition: Anthropic.Tool;
   input: z.ZodTypeAny;
-  run: (input: never, ctx: ToolContext) => Promise<string>;
+  run: (input: never, ctx: ToolContext) => Promise<string | ToolOutput>;
 }
 
 const iso = z.string().refine((v) => !Number.isNaN(Date.parse(v)), "must be an ISO date/time");
@@ -840,6 +858,133 @@ const TOOLS: Record<string, ToolDef> = {
     },
   },
 
+  figma_read: {
+    readsUntrusted: true,
+    permission: "read_figma",
+    definition: {
+      name: "figma_read",
+      description:
+        "Read a Figma file or frame live from a Figma link: file name, pages, frames (id, name, size) and the texts inside. Use the frame ids with figma_view to look at frames.",
+      input_schema: { type: "object", properties: { url: { type: "string", description: "Figma link (design/file/proto/board), with or without node-id" } }, required: ["url"], additionalProperties: false },
+    },
+    input: z.object({ url: z.string().url().max(2000) }),
+    run: async (input: { url: string }, ctx) => {
+      const ref = parseFigmaUrl(input.url);
+      if (!ref) throw new Error("That is not a Figma file link.");
+      const client = requireFigma(ctx);
+      if (ref.nodeId) {
+        const res = await client.nodes(ref.fileKey, [ref.nodeId], 4);
+        const node = res.nodes[ref.nodeId]?.document;
+        if (!node) throw new Error("Frame not found in this file.");
+        const s = summariseNode(node);
+        return JSON.stringify({ file: res.name, last_modified: res.lastModified ?? null, frame: { id: node.id, name: node.name, type: node.type }, inside: s.frames, texts: s.texts });
+      }
+      const file = await client.file(ref.fileKey, 2);
+      const pages = (file.document.children ?? []).map((pg) => ({
+        page: pg.name,
+        frames: (pg.children ?? []).slice(0, 80).map((f) => ({ id: f.id, name: f.name, type: f.type, size: f.absoluteBoundingBox ? `${Math.round(f.absoluteBoundingBox.width)}×${Math.round(f.absoluteBoundingBox.height)}` : null })),
+      }));
+      return JSON.stringify({ file: file.name, last_modified: file.lastModified ?? null, pages });
+    },
+  },
+
+  figma_view: {
+    readsUntrusted: true,
+    permission: "read_figma",
+    definition: {
+      name: "figma_view",
+      description:
+        "Look at Figma frames as images (max 4 per call), e.g. to check a static ad, read its layout or compare variants. Pass a frame link with node-id, or node_ids from figma_read.",
+      input_schema: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "Figma link of the file (or directly of the frame)" },
+          node_ids: { type: "array", items: { type: "string" }, description: "Frame ids like \"12:345\" (max 4)" },
+        },
+        required: ["url"],
+        additionalProperties: false,
+      },
+    },
+    input: z.object({ url: z.string().url().max(2000), node_ids: z.array(z.string().max(120)).max(4).optional() }),
+    run: async (input: { url: string; node_ids?: string[] }, ctx) => {
+      const ref = parseFigmaUrl(input.url);
+      if (!ref) throw new Error("That is not a Figma file link.");
+      const ids = [...new Set([...(input.node_ids ?? []).map(normaliseNodeId), ref.nodeId].filter((x): x is string => Boolean(x)))].slice(0, 4);
+      if (!ids.length) throw new Error("Which frame? Pass a frame link with node-id, or node_ids from figma_read.");
+      const client = requireFigma(ctx);
+      // Scale so the longest side is ~1500 px (enough detail, sensible size).
+      const meta = await client.nodes(ref.fileKey, ids, 1);
+      const sides = ids.map((id) => meta.nodes[id]?.document.absoluteBoundingBox).filter(Boolean).map((b) => Math.max(b!.width, b!.height));
+      const scale = sides.length ? Math.min(2, Math.max(0.05, 1500 / Math.max(...sides))) : 1;
+      const { images } = await client.images(ref.fileKey, ids, Number(scale.toFixed(3)));
+      const out: ToolOutput = { text: "", images: [] };
+      const lines: string[] = [];
+      for (const id of ids) {
+        const name = meta.nodes[id]?.document.name ?? id;
+        const src = images[id];
+        if (!src) {
+          lines.push(`${id} (${name}): could not be rendered`);
+          continue;
+        }
+        const res = await fetch(src, { cache: "no-store" });
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (!res.ok || buf.length > 4_500_000) {
+          lines.push(`${id} (${name}): image too large or unavailable`);
+          continue;
+        }
+        out.images.push({ media_type: "image/png", data: buf.toString("base64") });
+        lines.push(`Image ${out.images.length}: ${id} (${name})`);
+      }
+      out.text = `${meta.name}\n${lines.join("\n")}`;
+      return out;
+    },
+  },
+
+  figma_comments: {
+    readsUntrusted: true,
+    permission: "read_figma",
+    definition: {
+      name: "figma_comments",
+      description: "Read the comments in a Figma file (newest first): who, when, on which frame, resolved or open.",
+      input_schema: { type: "object", properties: { url: { type: "string" }, open_only: { type: "boolean", description: "Only unresolved comments" } }, required: ["url"], additionalProperties: false },
+    },
+    input: z.object({ url: z.string().url().max(2000), open_only: z.boolean().optional() }),
+    run: async (input: { url: string; open_only?: boolean }, ctx) => {
+      const ref = parseFigmaUrl(input.url);
+      if (!ref) throw new Error("That is not a Figma file link.");
+      const { comments } = await requireFigma(ctx).comments(ref.fileKey);
+      const rows = comments
+        .filter((c) => !input.open_only || !c.resolved_at)
+        .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""))
+        .slice(0, 40)
+        .map((c) => ({ by: c.user?.handle ?? "?", at: c.created_at ?? null, frame: c.client_meta?.node_id ?? null, resolved: Boolean(c.resolved_at), reply: Boolean(c.parent_id), text: c.message.slice(0, 600) }));
+      return JSON.stringify({ count: rows.length, comments: rows });
+    },
+  },
+
+  propose_figma_comment: {
+    permission: "comment_figma",
+    definition: {
+      name: "propose_figma_comment",
+      description: "Propose a comment in a Figma file (optionally pinned to a frame), written AS DAN. Never mention agents, AI or the village. Dan approves before it is posted.",
+      input_schema: {
+        type: "object",
+        properties: { url: { type: "string" }, message: { type: "string" }, node_id: { type: "string", description: "Frame id to attach the comment to (optional)" } },
+        required: ["url", "message"],
+        additionalProperties: false,
+      },
+    },
+    input: z.object({ url: z.string().url().max(2000), message: z.string().min(1).max(4000), node_id: z.string().max(120).optional() }),
+    run: async (input: { url: string; message: string; node_id?: string }, ctx) => {
+      assertDiscreet(input.message);
+      const ref = parseFigmaUrl(input.url);
+      if (!ref) throw new Error("That is not a Figma file link.");
+      requireFigma(ctx);
+      const nodeId = (input.node_id ? normaliseNodeId(input.node_id) : null) ?? ref.nodeId;
+      return newProposal(ctx, "figma_comment", { file_key: ref.fileKey, ...(nodeId ? { node_id: nodeId } : {}), message: input.message }, `Figma comment${nodeId ? ` on frame ${nodeId}` : ""}`);
+    },
+  },
+
   end_conversation: {
     permission: null,
     definition: {
@@ -964,6 +1109,11 @@ async function findDraftsList(ctx: ToolContext): Promise<string> {
   throw new Error(`The drafts list “${ctx.draftsListName}” does not exist yet. Ask Dan to create it in Settings.`);
 }
 
+function requireFigma(ctx: ToolContext) {
+  if (!ctx.figma) throw new Error("Figma is not connected for this company yet — Dan can connect it in Settings → Figma.");
+  return figmaClientFor(ctx.figma);
+}
+
 /** Doc parents: 4 = space, 5 = folder, 6 = list. Workspace-level/private docs are not allowed. */
 async function docInAllowedSpace(ctx: ToolContext, parent: { id: string; type: number }) {
   const account = requireAccount(ctx);
@@ -984,6 +1134,7 @@ const WRITE_TOOLS = new Set([
   "propose_task_change",
   "draft_task",
   "propose_mission_control_message",
+  "propose_figma_comment",
   "propose_save_meeting_notes",
   "propose_playbook_rule",
   "resolve_inbox_item",
@@ -1004,7 +1155,9 @@ export function toolsFor(agent: AgentProfile, opts: { readOnly?: boolean } = {})
 }
 
 /** Runs one tool call. Input is validated against the schema first; errors become is_error results. */
-export async function runTool(name: string, rawInput: unknown, ctx: ToolContext): Promise<{ content: string; isError: boolean }> {
+export type ToolResultContent = string | Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam>;
+
+export async function runTool(name: string, rawInput: unknown, ctx: ToolContext): Promise<{ content: ToolResultContent; isError: boolean }> {
   const tool = TOOLS[name];
   if (
     !tool ||
@@ -1019,9 +1172,16 @@ export async function runTool(name: string, rawInput: unknown, ctx: ToolContext)
     return { content: JSON.stringify({ INVALID_INPUT: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }), isError: true };
   }
   try {
-    const content = await tool.run(parsed.data as never, ctx);
+    const result = await tool.run(parsed.data as never, ctx);
     if (tool.readsUntrusted) ctx.tainted = true;
-    return { content, isError: false };
+    if (typeof result === "string") return { content: result, isError: false };
+    return {
+      content: [
+        { type: "text", text: result.text },
+        ...result.images.map((img) => ({ type: "image" as const, source: { type: "base64" as const, media_type: img.media_type, data: img.data } })),
+      ],
+      isError: false,
+    };
   } catch (err) {
     return { content: err instanceof Error ? err.message : "Tool failed.", isError: true };
   }

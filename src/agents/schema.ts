@@ -13,6 +13,8 @@ export const PERMISSIONS = [
   "propose_comment",
   "propose_change",
   "message_mission_control",
+  "read_figma",
+  "comment_figma",
 ] as const;
 
 /** Write actions the owner may allow an agent to do WITHOUT asking (per agent, default none). */

@@ -87,6 +87,10 @@ ClickUp's API has no calendar, so meeting-triggered visits read Google Calendar 
 2. **Deploy → New deployment → Web app**, execute as *Me*, access *Anyone* (the secret protects it). Copy the URL.
 3. Set `CALENDAR_FEED_URL` and `CALENDAR_FEED_SECRET`. Test: opening the URL without `?key=` must answer `forbidden`.
 
+## 8b. Figma (optional)
+
+Figma → account menu → Settings → Security → **Personal access tokens** → Generate new token with the scopes `current_user:read`, `file_content:read`, `file_comments:read` (and `file_comments:write` if agents may comment). In the village: **Settings → Figma** → paste it for the matching company. Each company can use a different Figma account.
+
 ## 9. Visits, notifications, desktop app
 
 - **Visits:** `vercel.json` runs `/api/cron/visits` every minute (needs `CRON_SECRET`). Agents with a schedule or a "before calendar events" trigger then come to your office on their own.

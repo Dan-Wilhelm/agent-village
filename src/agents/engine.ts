@@ -47,6 +47,7 @@ export async function runAgentTurn(opts: {
     draftsListName: ctx.draftsListName,
     keyFields: ctx.keyFields,
     companyDir: ctx.companyDir,
+    figma: ctx.figma,
     proposals: [],
     // Only proposal kinds Dan allowed for THIS agent run without asking; executeProposal re-validates everything.
     // Never in delegated turns (the request came from another agent, not from Dan).

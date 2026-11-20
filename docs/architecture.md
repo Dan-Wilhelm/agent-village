@@ -216,6 +216,14 @@ Approving a draft **moves** it from the drafts list into the target list (v3 mov
 - **Prepared visits:** when a trigger visit reaches the open village, the browser starts the agent's turn immediately (invisible conversation) while the agent walks over; the waiting card shows "preparing…" → "ready ✓" and opening it shows the finished answer without a new request. Nothing is stored server-side; if the village is closed, preparation starts when it is opened.
 - **"New since my last visit":** the first turn of a conversation tells scheduled agents when their previous scheduled visit was (computed from the schedule, Berlin time), so they can filter with `updated_after`.
 
+### 4.5d Figma (2026-11-20)
+
+- **One Figma account per company** (Settings → Figma): personal access token, encrypted like the ClickUp token (AES-256-GCM, row-bound AAD), checked against `GET /v1/me` before it is stored. Agents only ever get their own company's Figma account.
+- Scopes: `current_user:read`, `file_content:read`, `file_comments:read`, and `file_comments:write` only if agents may comment.
+- Tools (permission `read_figma`): `figma_read` (file/pages/frames/texts from a link), `figma_view` (exports up to 4 frames as PNG and shows them to the agent as images), `figma_comments`. Permission `comment_figma`: `propose_figma_comment` → approval card → posted as Dan (discretion filter applies; never "without asking").
+- Figma's REST API cannot create or modify designs; "creating" means comments in Figma and tasks built from Figma frames. Figma's rate limits are low (file reads ~10–20/min on full/dev seats, far less on view/collab seats).
+- Figma content is read live and never stored (image exports are fetched, passed to the model and dropped).
+
 ### 4.5 The Dispatcher: one input, the right agent comes running
 
 A central feature: I don't need to know which agent to call.

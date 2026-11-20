@@ -17,7 +17,7 @@ type ApiMessage = Anthropic.Beta.BetaMessageParam;
 
 export interface ProposalView {
   id: string;
-  kind: "comment" | "task_change" | "draft_task" | "mission_control_message" | "playbook_rule" | "meeting_notes";
+  kind: "comment" | "task_change" | "draft_task" | "mission_control_message" | "playbook_rule" | "meeting_notes" | "figma_comment";
   agentId: string;
   args: Record<string, unknown>;
   summary: string;
@@ -91,6 +91,9 @@ const TOOL_LABEL: Record<string, string> = {
   ask_colleague: "asking a colleague",
   ask_team_member: "asking the team",
   find_meeting_notes: "reading meeting notes",
+  figma_read: "reading Figma",
+  figma_view: "looking at the Figma frames",
+  figma_comments: "reading Figma comments",
   find_docs: "looking for docs",
   read_doc: "reading a doc",
   list_task_templates: "looking at templates",

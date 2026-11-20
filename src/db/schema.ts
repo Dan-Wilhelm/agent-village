@@ -98,3 +98,17 @@ export const appRateLimits = pgTable("app_rate_limits", {
   windowStart: timestamp("window_start", { withTimezone: true }).notNull().defaultNow(),
   count: integer("count").notNull().default(0),
 });
+
+/**
+ * Figma personal access tokens — one per company (strict isolation: an agent only
+ * gets its own company's Figma account). Encrypted like the ClickUp token.
+ */
+export const figmaAccounts = pgTable("figma_accounts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  /** Company id from the vault (e.g. "sqvm"). */
+  companyId: text("company_id").notNull().unique(),
+  tokenCiphertext: text("token_ciphertext").notNull(),
+  figmaUserId: text("figma_user_id").notNull(),
+  figmaHandle: text("figma_handle").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});

@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { clientFor, getClickUpAccount } from "@/integrations/clickup/account";
 import { apiValueFor, keyFields } from "@/integrations/clickup/fields";
+import { figmaClientFor, getFigmaAccount } from "@/integrations/figma/account";
 import { readVaultFile, writeVaultFile } from "@/integrations/vault/github";
 import { logActivity } from "@/lib/activity";
 
@@ -48,6 +49,11 @@ const schemas = {
     notes: z.string().min(10).max(60_000),
     company_dir: z.string(),
   }),
+  figma_comment: z.object({
+    file_key: z.string().regex(/^[A-Za-z0-9]{10,64}$/),
+    node_id: z.string().regex(/^[A-Za-z0-9:;]{3,120}$/).optional(),
+    message: z.string().min(1).max(4000),
+  }),
 } satisfies Record<ProposalKind, z.ZodTypeAny>;
 
 const PERMISSION: Record<ProposalKind, string | null> = {
@@ -57,6 +63,7 @@ const PERMISSION: Record<ProposalKind, string | null> = {
   mission_control_message: "message_mission_control",
   playbook_rule: null,
   meeting_notes: "read_meeting_notes",
+  figma_comment: "comment_figma",
 };
 
 async function account() {
@@ -259,6 +266,16 @@ export async function executeProposal(input: { agentId: string; kind: ProposalKi
       await appendToVault(`${dir}/Changelog.md`, "# Changelog\n", `- ${day}: ${args.file} rule added — ${args.source}`, `${agent.role}: changelog`);
       await logActivity(`agent:${agent.id}`, "vault.rule_learned", { file: args.file });
       return { ok: true, message: "Learned — the rule is in the playbook." };
+    }
+    case "figma_comment": {
+      const args = schemas.figma_comment.parse(input.args);
+      assertDiscreet(args.message);
+      // Only the Figma account of the agent's own company.
+      const figma = company ? await getFigmaAccount(company.id) : null;
+      if (!figma) throw new Error(`Figma is not connected for ${agent.company} — nothing was posted.`);
+      await figmaClientFor(figma).postComment(args.file_key, args.message, args.node_id);
+      await logActivity(`agent:${agent.id}`, "figma.comment_posted", { fileKey: args.file_key });
+      return { ok: true, message: "Comment posted in Figma." };
     }
     case "meeting_notes": {
       const args = schemas.meeting_notes.parse(input.args);

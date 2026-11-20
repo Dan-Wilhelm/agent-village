@@ -79,12 +79,14 @@ const READ: Array<[Permission, string, string]> = [
   ["read_comments", "Comments", "what was last done on a task"],
   ["read_calendar", "Calendar", "your upcoming meetings"],
   ["read_meeting_notes", "Meeting notes & docs", "your saved notes and ClickUp docs"],
+  ["read_figma", "Figma", "files, frames as images, comments (if Figma is connected)"],
 ];
-const ACT: Array<[Permission, AutoKind, string, string]> = [
+const ACT: Array<[Permission, AutoKind | null, string, string]> = [
   ["draft_task", "draft_task", "Create tasks", "as drafts in your private drafts list"],
   ["propose_comment", "comment", "Comment on tasks", "written as you"],
   ["propose_change", "task_change", "Change tasks", "status, due date, priority"],
   ["message_mission_control", "mission_control_message", "Message Mission Control", "DM as you"],
+  ["comment_figma", null, "Comment in Figma", "written as you, always asks first"],
 ];
 
 const emptyForm = (company: string): Form => ({
@@ -183,7 +185,7 @@ function toInput(f: Form): AgentInput {
     home: f.home,
     triggers,
     permissions: f.permissions,
-    auto_approve: f.autoApprove.filter((k) => ACT.some(([p, kind]) => kind === k && f.permissions.includes(p))),
+    auto_approve: f.autoApprove.filter((k) => ACT.some(([p, kind]) => kind !== null && kind === k && f.permissions.includes(p))),
   };
 }
 
@@ -565,22 +567,24 @@ function WizardDialog({ wizard, onClose }: { wizard: { mode: "create" } | { mode
                     <div className="mt-2 space-y-2">
                       {ACT.filter(([p]) => p !== "message_mission_control" || company?.hasMissionControl).map(([p, kind, label, hint]) => {
                         const allowed = form.permissions.includes(p);
-                        const auto = form.autoApprove.includes(kind);
+                        const auto = kind !== null && form.autoApprove.includes(kind);
                         return (
                           <div key={p} className="flex flex-wrap items-center gap-2 rounded-xl bg-ink/5 p-2">
                             <label className="flex flex-1 items-start gap-2">
                               <input type="checkbox" className="mt-1" checked={allowed} onChange={() => {
-                                setForm({ ...form, permissions: toggle(form.permissions, p), autoApprove: allowed ? form.autoApprove.filter((k) => k !== kind) : form.autoApprove });
+                                setForm({ ...form, permissions: toggle(form.permissions, p), autoApprove: allowed && kind ? form.autoApprove.filter((k) => k !== kind) : form.autoApprove });
                               }} />
                               <span>
                                 <span className="block font-bold">{label}</span>
                                 <span className="block text-xs text-ink/60">{hint}</span>
                               </span>
                             </label>
-                            <label className={`flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold ${auto ? "bg-berry/15 text-berry" : "text-ink/60"} ${allowed ? "" : "opacity-40"}`}>
-                              <input type="checkbox" disabled={!allowed} checked={auto} onChange={() => set("autoApprove", toggle(form.autoApprove, kind))} />
-                              without asking
-                            </label>
+                            {kind && (
+                              <label className={`flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold ${auto ? "bg-berry/15 text-berry" : "text-ink/60"} ${allowed ? "" : "opacity-40"}`}>
+                                <input type="checkbox" disabled={!allowed} checked={auto} onChange={() => set("autoApprove", toggle(form.autoApprove, kind))} />
+                                without asking
+                              </label>
+                            )}
                           </div>
                         );
                       })}
@@ -728,7 +732,7 @@ function Summary({ form, companyName }: { form: Form; companyName: string }) {
     ["Where", `${companyName} · team ${"existing" in input.team ? input.team.existing : `${input.team.create.name} (new)`}`],
     ["Kind", `${input.kind === "lead" ? "Team lead" : input.kind === "simple" ? "Simple" : "Intelligent"} · ${input.language.map((l) => (l === "de" ? "German" : "English")).join(" + ")}`],
     ["Reads", READ.filter(([p]) => input.permissions.includes(p)).map(([, l]) => l).join(", ") || "nothing"],
-    ["Does", ACT.filter(([p]) => input.permissions.includes(p)).map(([, k, l]) => `${l}${input.auto_approve.includes(k) ? " (without asking)" : " (asks first)"}`).join(", ") || "only talks and proposes rules"],
+    ["Does", ACT.filter(([p]) => input.permissions.includes(p)).map(([, k, l]) => `${l}${k && input.auto_approve.includes(k) ? " (without asking)" : " (asks first)"}`).join(", ") || "only talks and proposes rules"],
     [
       "Comes",
       schedule.length

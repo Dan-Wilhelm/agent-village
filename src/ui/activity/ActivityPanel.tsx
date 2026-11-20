@@ -24,6 +24,9 @@ const LABEL: Record<string, string> = {
   "team.copied": "copied a team",
   "company.created": "created a company",
   "push.subscribed": "turned on notifications",
+  "figma.connected": "connected Figma",
+  "figma.disconnected": "disconnected Figma",
+  "figma.comment_posted": "commented in Figma",
   "push.unsubscribed": "turned off notifications",
 };
 

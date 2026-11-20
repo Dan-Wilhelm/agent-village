@@ -358,6 +358,8 @@ function ProposalCard({ conversationId, proposal: p }: { conversationId: string;
   const preview =
     p.kind === "comment" || p.kind === "mission_control_message"
       ? String(p.args.text ?? "")
+      : p.kind === "figma_comment"
+      ? String(p.args.message ?? "")
       : p.kind === "playbook_rule"
         ? `${String(p.args.rule ?? "")}\nTest: ${String(p.args.test_case ?? "")}${p.args.replaces ? `\nReplaces the open question: ${String(p.args.replaces)}` : ""}`
         : p.kind === "meeting_notes"
@@ -375,6 +377,7 @@ function ProposalCard({ conversationId, proposal: p }: { conversationId: string;
     mission_control_message: "DM to Mission Control (as you)",
     playbook_rule: "Learn a rule",
     meeting_notes: "Save meeting notes (your vault)",
+    figma_comment: "Comment in Figma (as you)",
   }[p.kind];
   return (
     <div className="rounded-2xl border-2 border-wood bg-white px-3 py-2">

@@ -9,6 +9,8 @@ import { NotAllowed } from "@/ui/NotAllowed";
 
 import { loadClickUpChoices } from "./actions";
 import { ClickUpSettings } from "./ClickUpSettings";
+import { loadFigmaStatus } from "./figma-actions";
+import { FigmaSettings } from "./FigmaSettings";
 import { PasskeySettings } from "./PasskeySettings";
 import { PushSettings } from "./PushSettings";
 
@@ -28,7 +30,7 @@ async function SettingsGate() {
   }
 
   const account = await getClickUpAccount();
-  const choices = account ? await loadClickUpChoices() : { teams: [], spaces: [] };
+  const [choices, figma] = await Promise.all([account ? loadClickUpChoices() : Promise.resolve({ teams: [], spaces: [] }), loadFigmaStatus()]);
 
   return (
     <main className="min-h-screen flex-1 bg-gradient-to-b from-sky to-parchment p-4 sm:p-8">
@@ -56,6 +58,7 @@ async function SettingsGate() {
           spaces={choices.spaces}
           loadError={"error" in choices ? (choices.error as string) : null}
         />
+        <FigmaSettings companies={figma} />
       </div>
     </main>
   );

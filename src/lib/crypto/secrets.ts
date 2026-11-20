@@ -45,4 +45,5 @@ export function decryptSecret(payload: string, context: string, rawKey = process
 
 export const secretContext = {
   clickupToken: (accountId: string) => `clickup-token:${accountId}`,
+  figmaToken: (accountId: string) => `figma-token:${accountId}`,
 };
