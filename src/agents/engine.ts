@@ -19,6 +19,7 @@ export type EngineEvent =
   | { type: "tool"; name: string; status: "running" | "done" | "error" }
   | { type: "proposal"; proposal: Proposal }
   | { type: "done"; messages: Anthropic.Beta.BetaMessageParam[] }
+  | { type: "finish" }
   | { type: "error"; message: string };
 
 const MAX_ITERATIONS = 12;
@@ -183,5 +184,6 @@ export async function runAgentTurn(opts: {
     added.push(toolMessage);
   }
 
+  if (toolCtx.finishRequested && !opts.delegatedBy && !opts.askedBy) opts.emit({ type: "finish" });
   opts.emit({ type: "done", messages: added });
 }

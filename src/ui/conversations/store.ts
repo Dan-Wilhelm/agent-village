@@ -49,6 +49,10 @@ export interface Conversation {
   hidden?: boolean;
   /** The trigger visit this conversation was prepared for. */
   preparedFor?: string;
+  /** Answers Dan hasn't seen yet (the agent finished while another tab was open or the dock was hidden). */
+  unread?: number;
+  /** The agent understood Dan is done: open the finish dialog. */
+  finishRequested?: boolean;
 }
 
 interface ConversationState {
@@ -71,6 +75,8 @@ interface ConversationState {
   prepare: (agentId: string, agentName: string, visit: { opening: string; triggerLabel: string; visitId: string }) => boolean;
   close: (agentId: string) => void;
   setMode: (agentId: string, mode: "work" | "training") => void;
+  /** The finish dialog was opened for this conversation. */
+  clearFinishRequest: (agentId: string) => void;
   /** `asNote`: text comes from a trigger, not from Dan (shown as a note, never stored as feedback). */
   send: (agentId: string, text: string, opts?: { asNote?: string }) => Promise<void>;
   decide: (agentId: string, proposalId: string, decision: "approve" | "reject") => Promise<void>;
@@ -100,7 +106,12 @@ export const useConversations = create<ConversationState>()((set, get) => {
     order: [],
     active: null,
     dockCollapsed: false,
-    setDockCollapsed: (v) => set({ dockCollapsed: v }),
+    setDockCollapsed: (v) =>
+      set((s) => {
+        // Showing the dock again = Dan now sees the active conversation.
+        if (v || !s.active || !s.conversations[s.active]?.unread) return { dockCollapsed: v };
+        return { dockCollapsed: v, conversations: { ...s.conversations, [s.active]: { ...s.conversations[s.active], unread: 0 } } };
+      }),
 
     open: (agentId, agentName, opts) => {
       sceneBridge.unlock();
@@ -117,7 +128,7 @@ export const useConversations = create<ConversationState>()((set, get) => {
       } else if (opts?.mode) {
         patch(agentId, (c) => ({ ...c, mode: opts.mode! }));
       }
-      patch(agentId, (c) => (c.hidden ? { ...c, hidden: false } : c));
+      patch(agentId, (c) => (c.hidden || c.unread ? { ...c, hidden: false, unread: 0 } : c));
       set({ active: agentId, dockCollapsed: false });
       if (!opts?.opening) return;
       const conv = get().conversations[agentId];
@@ -133,9 +144,11 @@ export const useConversations = create<ConversationState>()((set, get) => {
 
     focus: (agentId) => {
       sceneBridge.unlock();
-      patch(agentId, (c) => (c.hidden ? { ...c, hidden: false } : c));
+      patch(agentId, (c) => (c.hidden || c.unread ? { ...c, hidden: false, unread: 0 } : c));
       set({ active: agentId, dockCollapsed: false });
     },
+
+    clearFinishRequest: (agentId) => patch(agentId, (c) => (c.finishRequested ? { ...c, finishRequested: false } : c)),
 
     prepare: (agentId, agentName, visit) => {
       if (get().conversations[agentId]) return false;
@@ -258,6 +271,8 @@ export const useConversations = create<ConversationState>()((set, get) => {
               }));
             } else if (event.type === "done") {
               patch(agentId, (x) => ({ ...x, history: [...x.history, ...(event.messages as ApiMessage[])] }));
+            } else if (event.type === "finish") {
+              patch(agentId, (x) => ({ ...x, finishRequested: true }));
             } else if (event.type === "error") {
               patch(agentId, (x) => ({ ...x, items: [...x.items, { kind: "error", text: event.message }] }));
             }
@@ -266,7 +281,10 @@ export const useConversations = create<ConversationState>()((set, get) => {
       } catch (err) {
         patch(agentId, (x) => ({ ...x, items: [...x.items, { kind: "error", text: err instanceof Error ? err.message : "Something went wrong." }] }));
       } finally {
-        patch(agentId, (x) => ({ ...x, streaming: false }));
+        // Not looking at this conversation right now? Mark the new answer as unread.
+        const s = get();
+        const unseen = s.active !== agentId || s.dockCollapsed || s.conversations[agentId]?.hidden;
+        patch(agentId, (x) => ({ ...x, streaming: false, ...(unseen && agentText ? { unread: (x.unread ?? 0) + 1 } : {}) }));
         const after = get().conversations[agentId];
         const mode = after?.mode;
         // A prepared visit is ready before Dan opened it: say so in the speech bubble.

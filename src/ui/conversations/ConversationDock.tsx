@@ -7,6 +7,7 @@ import { getHqTaskDetail, type HqTaskDetail } from "@/app/actions/hq";
 import { useVoiceInput } from "@/ui/voice";
 import { useVillage } from "@/world/store";
 
+import { tokenize } from "./rich-text";
 import { toolLabel, useConversations, type Conversation, type ProposalView } from "./store";
 import { safeColor } from "@/ui/safe-color";
 import { VoiceStatus } from "@/ui/VoiceStatus";
@@ -77,13 +78,25 @@ export function ConversationDock() {
               <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: a?.look.body ?? "#ccc" }} aria-hidden />
               {c.agentName}
               {c.streaming && <span className="animate-pulse motion-reduce:animate-none">…</span>}
-              {Object.values(c.proposals).some((p) => p.state === "pending") && <span className="text-berry">●</span>}
+              {c.unread ? (
+                <span
+                  className="min-w-[1.1rem] rounded-full bg-berry px-1 text-center text-[10px] font-black leading-[1.1rem] text-cream"
+                  aria-label={`${c.unread} new ${c.unread === 1 ? "answer" : "answers"}`}
+                >
+                  {c.unread}
+                </span>
+              ) : (
+                Object.values(c.proposals).some((p) => p.state === "pending") && (
+                  <span className="text-berry" aria-label="waiting for your decision">●</span>
+                )
+              )}
             </button>
           );
         })}
         <span className="flex-1" />
         <button type="button" onClick={() => setCollapsed(!collapsed)} className="rounded-t-xl bg-ink/70 px-2 py-1 text-xs font-bold text-cream">
           {collapsed ? "Show" : "Hide"}
+          {collapsed && visibleOrder.some((id) => conversations[id]?.unread) && <span className="ml-1 text-berry">●</span>}
         </button>
       </div>
       {!collapsed && current && <ConversationView key={current.agentId} conversation={current} />}
@@ -94,17 +107,47 @@ export function ConversationDock() {
 function ConversationView({ conversation: c }: { conversation: Conversation }) {
   const send = useConversations((s) => s.send);
   const setMode = useConversations((s) => s.setMode);
+  const clearFinishRequest = useConversations((s) => s.clearFinishRequest);
   const agent = useVillage((s) => s.agents[c.agentId]);
   const [draft, setDraft] = useState("");
   const [finishing, setFinishing] = useState(false);
   const [peek, setPeek] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const atBottom = useRef(true);
+  const [hasNew, setHasNew] = useState(false);
   const voice = useVoiceInput((text) => setDraft((d) => (d ? `${d} ${text}` : text)));
 
   const lastItem = c.items.at(-1);
-  useEffect(() => {
+  const scrollToEnd = () => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+    atBottom.current = true;
+    setHasNew(false);
+  };
+  // Only follow new text while Dan is already at the bottom; otherwise leave the view where he reads.
+  useEffect(() => {
+    if (atBottom.current || lastItem?.kind === "user") {
+      listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+      atBottom.current = true;
+    } else {
+      setHasNew(true);
+    }
   }, [c.items.length, lastItem]);
+
+  // The agent understood Dan is done → the finish dialog opens once the answer is complete.
+  const showFinish = finishing || Boolean(c.finishRequested && !c.streaming);
+
+  // The input grows with the text (up to half the screen); it can also be dragged bigger.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    if (!draft) {
+      el.style.height = "";
+      return;
+    }
+    const max = window.innerHeight * 0.5;
+    if (el.scrollHeight > el.clientHeight) el.style.height = `${Math.min(el.scrollHeight + 4, max)}px`;
+  }, [draft]);
 
   const submit = () => {
     if (!draft.trim() || c.streaming) return;
@@ -138,7 +181,16 @@ function ConversationView({ conversation: c }: { conversation: Conversation }) {
         </button>
       </header>
 
-      <div ref={listRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-3 text-sm">
+      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={listRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+          if (atBottom.current && hasNew) setHasNew(false);
+        }}
+        className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-3 text-sm"
+      >
         {c.items.length === 0 && (
           <p className="text-ink/60">
             {c.agentName} is on the way. Say or type what you need{c.mode === "training" ? " — you're in training mode" : ""}.
@@ -148,13 +200,13 @@ function ConversationView({ conversation: c }: { conversation: Conversation }) {
           switch (item.kind) {
             case "user":
               return (
-                <p key={i} className="ml-8 whitespace-pre-wrap rounded-2xl rounded-br-sm bg-sky/50 px-3 py-2">
+                <p key={i} className="ml-8 whitespace-pre-wrap rounded-2xl rounded-br-sm bg-sky/50 px-3 py-2 [overflow-wrap:anywhere]">
                   {item.text}
                 </p>
               );
             case "agent":
               return (
-                <div key={i} className="mr-6 whitespace-pre-wrap rounded-2xl rounded-bl-sm bg-parchment/70 px-3 py-2 leading-relaxed">
+                <div key={i} className="mr-6 whitespace-pre-wrap rounded-2xl rounded-bl-sm bg-parchment/70 px-3 py-2 leading-relaxed [overflow-wrap:anywhere]">
                   <RichText text={item.text} onTask={setPeek} />
                 </div>
               );
@@ -186,6 +238,16 @@ function ConversationView({ conversation: c }: { conversation: Conversation }) {
           </p>
         )}
       </div>
+      {hasNew && (
+        <button
+          type="button"
+          onClick={scrollToEnd}
+          className="cozy-button absolute bottom-2 left-1/2 -translate-x-1/2 bg-wood px-3 py-1 text-xs text-cream shadow-md"
+        >
+          ↓ New message
+        </button>
+      )}
+      </div>
 
       <form
         className="flex items-end gap-2 border-t-2 border-parchment px-3 py-2"
@@ -195,6 +257,7 @@ function ConversationView({ conversation: c }: { conversation: Conversation }) {
         }}
       >
         <textarea
+          ref={inputRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -206,7 +269,8 @@ function ConversationView({ conversation: c }: { conversation: Conversation }) {
           rows={2}
           placeholder={c.mode === "training" ? "Teach me something…" : `Message ${c.agentName}…`}
           aria-label={`Message ${c.agentName}`}
-          className="min-h-[2.5rem] flex-1 resize-none rounded-xl border-2 border-parchment bg-white px-3 py-1.5 text-sm"
+          title="Drag the corner to make the field bigger"
+          className="max-h-[50vh] min-h-[2.75rem] flex-1 resize-y rounded-xl border-2 border-parchment bg-white px-3 py-1.5 text-sm"
         />
         {voice.supported && (
           <div className="flex flex-col items-center gap-1">
@@ -235,7 +299,15 @@ function ConversationView({ conversation: c }: { conversation: Conversation }) {
       </form>
       <VoiceStatus listening={voice.listening} interim={voice.interim} error={voice.error} className="px-3 pb-2" />
 
-      {finishing && <FinishDialog conversation={c} onCancel={() => setFinishing(false)} />}
+      {showFinish && (
+        <FinishDialog
+          conversation={c}
+          onCancel={() => {
+            setFinishing(false);
+            clearFinishRequest(c.agentId);
+          }}
+        />
+      )}
       {peek && <TaskPeek taskId={peek} onClose={() => setPeek(null)} />}
     </section>
   );
@@ -243,26 +315,37 @@ function ConversationView({ conversation: c }: { conversation: Conversation }) {
 
 /** Plain text with **bold** and clickable [task:ID] chips (content loaded live on click). */
 function RichText({ text, onTask }: { text: string; onTask: (id: string) => void }) {
-  const parts = text.split(/(\[task:[A-Za-z0-9_-]{1,40}\]|\*\*[^*]+\*\*)/g);
   return (
     <>
-      {parts.map((p, i) => {
-        const task = p.match(/^\[task:([A-Za-z0-9_-]{1,40})\]$/);
-        if (task)
+      {tokenize(text).map((t, i) => {
+        if (t.kind === "task")
           return (
             <button
               key={i}
               type="button"
-              onClick={() => onTask(task[1])}
-              title={`Open task ${task[1]} (loaded live from ClickUp)`}
-              aria-label={`Open task ${task[1]}`}
+              onClick={() => onTask(t.id)}
+              title={`Open task ${t.id} (loaded live from ClickUp)`}
+              aria-label={`Open task ${t.id}`}
               className="mx-0.5 inline-flex rounded-md bg-wood/15 px-1.5 text-xs font-black text-wood-dark hover:bg-wood/25"
             >
               open ↗
             </button>
           );
-        if (p.startsWith("**") && p.endsWith("**")) return <strong key={i}>{p.slice(2, -2)}</strong>;
-        return <span key={i}>{p}</span>;
+        if (t.kind === "bold") return <strong key={i}>{t.text}</strong>;
+        if (t.kind === "link")
+          return (
+            <a
+              key={i}
+              href={t.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={t.href}
+              className="mx-0.5 inline-flex rounded-md bg-sky/40 px-1.5 text-xs font-black text-ink underline decoration-dotted hover:bg-sky/60"
+            >
+              {t.label} ↗
+            </a>
+          );
+        return <span key={i}>{t.text}</span>;
       })}
     </>
   );

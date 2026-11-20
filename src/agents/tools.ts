@@ -64,6 +64,8 @@ export interface ToolContext {
   colleagueQuestions?: number;
   /** Answering a colleague's question: no writes, no proposals. */
   readOnly?: boolean;
+  /** Set by end_conversation: the UI opens the finish dialog after this turn. */
+  finishRequested?: boolean;
   /** Members of the lead's team (id, name, role). */
   teamMembers?: Array<{ id: string; name: string; role: string }>;
 }
@@ -103,10 +105,12 @@ function compactTask(
     date_updated: number | null;
     date_closed?: number | null;
     custom_fields?: ClickUpCustomField[] | null;
+    checklists?: Array<{ items?: Array<{ resolved?: boolean | null }> | null }> | null;
   },
   fieldNames?: string[],
 ) {
   const fields = keyFields(t.custom_fields, fieldNames);
+  const checkItems = (t.checklists ?? []).flatMap((c) => c.items ?? []);
   return {
     id: t.id,
     name: t.name,
@@ -116,6 +120,7 @@ function compactTask(
     assignees: (t.assignees ?? []).map((a) => a.username ?? "?"),
     ...(t.tags?.length ? { tags: t.tags.map((x) => x.name) } : {}),
     ...(Object.keys(fields).length ? { fields } : {}),
+    ...(checkItems.length ? { checklist_progress: `${checkItems.filter((i) => i.resolved).length}/${checkItems.length} done` } : {}),
     updated: t.date_updated ? new Date(t.date_updated).toISOString() : null,
     ...(t.date_closed ? { closed: new Date(t.date_closed).toISOString() } : {}),
     url: t.url ?? null,
@@ -328,7 +333,7 @@ const TOOLS: Record<string, ToolDef> = {
     definition: {
       name: "get_task",
       description:
-        "Read one task live: status, due date, assignees, description and (if allowed) the latest comments. Use it to see what was last done on a task — Dan documents progress in comments.",
+        "Read one task live: status, due date, assignees, description, checklists with each item's done/open state, and (if allowed) the latest comments. Use it to see what was last done on a task — Dan documents progress in comments and checklists.",
       input_schema: {
         type: "object",
         properties: {
@@ -347,6 +352,12 @@ const TOOLS: Record<string, ToolDef> = {
       return JSON.stringify({
         ...compactTask(task, ctx.keyFields),
         description: (task.markdown_description ?? task.text_content ?? "").slice(0, 6000),
+        checklists: (task.checklists ?? []).map((cl) => ({
+          name: cl.name ?? "Checklist",
+          done: (cl.items ?? []).filter((i) => i.resolved).length,
+          total: (cl.items ?? []).length,
+          items: (cl.items ?? []).slice(0, 60).map((i) => ({ item: (i.name ?? "").slice(0, 200), done: Boolean(i.resolved), ...(i.parent ? { sub_item: true } : {}) })),
+        })),
         comments: comments.map((c) => ({
           by: c.user?.username ?? "?",
           at: c.date ? new Date(c.date).toISOString() : null,
@@ -492,6 +503,7 @@ const TOOLS: Record<string, ToolDef> = {
         "• New plain task: target_list_id + name + description_markdown.",
         "• From a ClickUp template: target_list_id + name + template_id (no description yet). The result shows the template's description — fill it in and call draft_task again with draft_task_id.",
         "• Revise an existing draft: draft_task_id + what changes. target_list_id, status and fields from earlier in this conversation are kept unless you pass new ones — after a page reload pass them again.",
+        "checklists = checklists to add to the new task, e.g. [{\"name\": \"Build\", \"items\": [\"Hero section\", \"Quiz logic\"]}]; on a revision they replace the draft's checklists with the same names.",
         "fields = custom fields by readable value, e.g. {\"Client Code\": \"NOVA\", \"Format\": \"IMG\", \"Google Drive\": \"https://…\"}; they are checked against the target list now and set on approval.",
         "Write as Dan would (no mention of agents/AI).",
       ].join("\n"),
@@ -505,6 +517,15 @@ const TOOLS: Record<string, ToolDef> = {
           draft_task_id: { type: "string", description: "Revise this existing draft instead of creating a new one" },
           status: { type: "string", description: "Status in the target list after approval (exact name), e.g. \"briefing\"" },
           fields: { type: "object", additionalProperties: { type: "string" } },
+          checklists: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { name: { type: "string" }, items: { type: "array", items: { type: "string" } } },
+              required: ["name", "items"],
+              additionalProperties: false,
+            },
+          },
           due_date: { type: "string", description: "ISO date/time (optional)" },
           priority: { type: "integer", description: "1 urgent, 2 high, 3 normal, 4 low (optional)" },
         },
@@ -519,11 +540,16 @@ const TOOLS: Record<string, ToolDef> = {
       draft_task_id: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/).optional(),
       status: z.string().max(80).optional(),
       fields: z.record(z.string().max(60), z.string().max(2000)).optional(),
+      checklists: z
+        .array(z.object({ name: z.string().trim().min(1).max(120), items: z.array(z.string().trim().min(1).max(300)).min(1).max(50) }))
+        .max(10)
+        .optional(),
       due_date: iso.optional(),
       priority: z.number().int().min(1).max(4).optional(),
     }),
     run: async (
       raw: {
+        checklists?: Array<{ name: string; items: string[] }>;
         target_list_id?: string;
         name?: string;
         description_markdown?: string;
@@ -546,7 +572,9 @@ const TOOLS: Record<string, ToolDef> = {
       };
       if (!input.target_list_id) throw new Error("target_list_id is needed (the list the task should go to).");
       const targetListId = input.target_list_id;
-      assertDiscreet(`${input.name ?? ""}\n${input.description_markdown ?? ""}\n${Object.values(input.fields ?? {}).join("\n")}`);
+      assertDiscreet(
+        `${input.name ?? ""}\n${input.description_markdown ?? ""}\n${Object.values(input.fields ?? {}).join("\n")}\n${(input.checklists ?? []).map((c) => `${c.name}\n${c.items.join("\n")}`).join("\n")}`,
+      );
       const account = requireAccount(ctx);
       const client = clientFor(account);
 
@@ -597,6 +625,16 @@ const TOOLS: Record<string, ToolDef> = {
         draftId = created.id;
       }
 
+      // Checklists live on the draft itself (they move with it on approval).
+      if (input.checklists?.length) {
+        const current = await client.getTask(draftId);
+        const names = new Set(input.checklists.map((c) => c.name.toLowerCase()));
+        for (const cl of current.checklists ?? []) if (cl.name && names.has(cl.name.toLowerCase())) await client.deleteChecklist(cl.id);
+        for (const cl of input.checklists) {
+          const { checklist } = await client.createChecklist(draftId, cl.name);
+          for (const item of cl.items) await client.createChecklistItem(checklist.id, item);
+        }
+      }
       const draft = await client.getTask(draftId);
       const args = {
         draft_task_id: draftId,
@@ -802,6 +840,22 @@ const TOOLS: Record<string, ToolDef> = {
     },
   },
 
+  end_conversation: {
+    permission: null,
+    definition: {
+      name: "end_conversation",
+      description:
+        "Dan is saying goodbye or that he's done (e.g. \"danke, das war's\", \"tschüss\", \"bye\", \"that's all\", \"bis später\"). Write ONE short goodbye first, then call this as the last step (write nothing after it): the village then opens the finish dialog where Dan decides what you learn. Don't call it for a mere \"danke\" in the middle of work.",
+      input_schema: { type: "object", properties: {}, additionalProperties: false },
+    },
+    input: z.object({}),
+    run: async (_input: Record<string, never>, ctx) => {
+      if (ctx.readOnly) throw new Error("Not available here.");
+      ctx.finishRequested = true;
+      return "Done — the finish dialog opens for Dan now. Your goodbye is already written: end your answer here without adding anything.";
+    },
+  },
+
   ask_colleague: {
     readsUntrusted: true,
     permission: null,
@@ -935,6 +989,7 @@ const WRITE_TOOLS = new Set([
   "resolve_inbox_item",
   "ask_team_member",
   "ask_colleague",
+  "end_conversation",
 ]);
 
 /** Names of tools whose results contain text written by others. */

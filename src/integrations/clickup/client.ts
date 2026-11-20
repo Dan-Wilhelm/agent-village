@@ -99,6 +99,19 @@ export const taskSchema = z.object({
   markdown_description: z.string().nullish(),
   text_content: z.string().nullish(),
   custom_fields: z.array(customFieldSchema()).nullish(),
+  checklists: z
+    .array(
+      z.object({
+        id: z.coerce.string(),
+        name: z.string().nullish(),
+        resolved: z.coerce.number().nullish(),
+        unresolved: z.coerce.number().nullish(),
+        items: z
+          .array(z.object({ id: z.coerce.string(), name: z.string().nullish(), resolved: z.boolean().nullish(), parent: z.coerce.string().nullish() }))
+          .nullish(),
+      }),
+    )
+    .nullish(),
 });
 export type ClickUpTask = z.infer<typeof taskSchema>;
 
@@ -360,6 +373,12 @@ export function createClickUpClient(opts: ClickUpClientOptions) {
     getListFields: (listId: string) => request("GET", `/list/${encodeURIComponent(listId)}/field`, listFieldsSchema),
     getFolder: (folderId: string) =>
       request("GET", `/folder/${encodeURIComponent(folderId)}`, z.object({ id: z.coerce.string(), space: z.object({ id: z.coerce.string() }) })),
+    // --- checklists (drafts only, or after approval) ---
+    createChecklist: (taskId: string, name: string) =>
+      request("POST", `/task/${encodeURIComponent(taskId)}/checklist`, z.object({ checklist: z.object({ id: z.coerce.string() }) }), { body: { name } }),
+    createChecklistItem: (checklistId: string, name: string) =>
+      request("POST", `/checklist/${encodeURIComponent(checklistId)}/checklist_item`, null, { body: { name } }),
+    deleteChecklist: (checklistId: string) => request("DELETE", `/checklist/${encodeURIComponent(checklistId)}`, null),
     setCustomField: (taskId: string, fieldId: string, value: unknown) =>
       request("POST", `/task/${encodeURIComponent(taskId)}/field/${encodeURIComponent(fieldId)}`, null, { body: { value } }),
     // --- task templates ---

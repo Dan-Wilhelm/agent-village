@@ -18,6 +18,8 @@ interface ServerVisit {
 }
 
 const POLL_MS = 30_000;
+/** Visits whose (possibly delayed) departure is already planned — never summon twice. */
+const planned = new Set<string>();
 
 function openingFor(v: ServerVisit) {
   const at = new Date(v.dueAt).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin" });
@@ -36,12 +38,18 @@ export function startVisitPolling(): () => void {
         if (res.ok) {
           const { visits } = (await res.json()) as { visits: ServerVisit[] };
           const queue = useVillage.getState().queue;
+          let departures = 0;
           for (const v of visits) {
-            if (queue.some((q) => q.visitId === v.id)) continue;
+            if (planned.has(v.id) || queue.some((q) => q.visitId === v.id)) continue;
             // If the agent is already at the desk for something else, the visit waits for the next round.
             if (queue.some((q) => q.agentId === v.agentId)) continue;
             const opening = openingFor(v);
-            summonAgent(v.agentId, { title: v.reason, body: opening, priority: v.priority, visitId: v.id });
+            // Several visits at once: agents set off a few seconds apart instead of all together.
+            const delay = departures++ * 2500;
+            planned.add(v.id);
+            const go = () => summonAgent(v.agentId, { title: v.reason, body: opening, priority: v.priority, visitId: v.id });
+            if (delay) setTimeout(go, delay);
+            else go();
             // Option 1: the agent starts working while it walks over — ready when Dan opens the visit.
             const name = useVillage.getState().agents[v.agentId]?.name ?? "Agent";
             useConversations.getState().prepare(v.agentId, name, { opening, triggerLabel: `⏰ ${v.reason}`, visitId: v.id });

@@ -43,7 +43,19 @@ export function Hud({ ownerName }: { ownerName: string }) {
     <div className="pointer-events-none absolute inset-0 select-none">
       {/* top-left: title + controls hint */}
       <div className="cozy-card pointer-events-auto absolute left-4 top-4 max-w-xs px-4 py-3">
-        <p className="text-lg font-black leading-tight text-wood-dark">Agent Village</p>
+        {/* Settings as a small icon in the corner — away from the everyday buttons. */}
+        <Link
+          href="/settings"
+          aria-label="Settings"
+          title="Settings"
+          className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full text-ink/50 transition-colors hover:bg-parchment hover:text-wood-dark focus-visible:outline-2 focus-visible:outline-sky"
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+        </Link>
+        <p className="pr-8 text-lg font-black leading-tight text-wood-dark">Agent Village</p>
         <p className="text-sm text-ink/75">Hi {ownerName}! 👋</p>
         <p className="mt-2 text-xs leading-snug text-ink/70">
           {mode === "walk"
@@ -78,9 +90,6 @@ export function Hud({ ownerName }: { ownerName: string }) {
           >
             Back to my desk
           </button>
-          <Link href="/settings" className="cozy-button bg-parchment px-3 py-1 text-xs">
-            Settings
-          </Link>
         </div>
       </div>
 
